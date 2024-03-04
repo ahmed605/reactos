@@ -137,7 +137,7 @@ SvwChooseDeviceSpeed(
 
         ASSERT((1 << Mode) & MWDMA_ALL);
 
-        if (SvwMwDmaTimings[Mode - MWDMA_MODE(0)].CycleTime >= Device->MinMwDmaCycleTime)
+        if (SvwMwDmaTimings[Mode].CycleTime >= Device->MinMwDmaCycleTime)
             break;
     }
     if (Mode != Device->DmaMode)
