@@ -10,6 +10,8 @@ add_definitions(
 spec2def(d3dwine.dll wined3d.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    adapter_gl.c
+    adapter_vk.c
     arb_program_shader.c
     ati_fragment_shader.c
     buffer.c
@@ -25,9 +27,9 @@ list(APPEND SOURCE
     query.c
     resource.c
     sampler.c
-    shader.c
     shader_sm1.c
     shader_sm4.c
+    shader.c
     state.c
     stateblock.c
     surface.c
