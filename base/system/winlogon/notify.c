@@ -475,6 +475,7 @@ CallNotificationDll(
     _In_ NOTIFICATION_TYPE Type,
     _In_ PWLX_NOTIFICATION_INFO pInfo)
 {
+<<<<<<< HEAD
     PWLX_NOTIFY_HANDLER pNotifyHandler;
     WLX_NOTIFICATION_INFO Info;
     HANDLE UserToken;
@@ -523,6 +524,9 @@ CallNotificationDll(
     /* Revert impersonation */
     if (UserToken)
         RevertToSelf();
+=======
+    UNREFERENCED_PARAMETER(FuncNames);
+>>>>>>> 399b5d0da8e ([HACKS] The hack list is as follows:)
 }
 
 
