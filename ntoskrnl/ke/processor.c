@@ -16,7 +16,7 @@
 KAFFINITY KeActiveProcessors = 0;
 
 /* Number of processors */
-CCHAR KeNumberProcessors = 0;
+volatile CCHAR KeNumberProcessors = 0;
 
 #ifdef CONFIG_SMP
 

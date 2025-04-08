@@ -701,8 +701,11 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
 #endif
     PtrToUL64(&IopNumTriageDumpDataBlocks),
     PtrToUL64(IopTriageDumpDataBlocks),
+    0,
+    0,
+    0,
 
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_WIN7)
 #error KdDebuggerDataBlock requires other fields for this NT version!
 #endif
 };

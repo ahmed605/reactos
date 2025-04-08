@@ -1059,7 +1059,7 @@ FsRtlSplitBaseMcb(
 
 #endif /* (NTDDI_VERSION >= NTDDI_WS03) */
 
-#if (NTDDI_VERSION >= NTDDI_VISTA)
+#if 0//(NTDDI_VERSION >= NTDDI_VISTA)
 
 _When_(!Flags & MCB_FLAG_RAISE_ON_ALLOCATION_FAILURE, _Must_inspect_result_)
 _IRQL_requires_max_(APC_LEVEL)

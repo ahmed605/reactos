@@ -390,7 +390,7 @@ CcCoherencyFlushAndPurgeCache(
     ((PLARGE_INTEGER)((FO)->SectionObjectPointer->SharedCacheMap) + 1) \
 )
 
-#if (NTDDI_VERSION >= NTDDI_VISTA)
+#if 0// (NTDDI_VERSION >= NTDDI_VISTA)
 NTKERNELAPI
 BOOLEAN
 NTAPI

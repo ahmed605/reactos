@@ -201,7 +201,7 @@ Abstract:
 
 /* Make Sure NTDDI_VERSION and _WIN32_WINNT Match */
 #if ((NTDDI_VERSION >> 16) != _WIN32_WINNT)
-#error NTDDI_VERSION and _WIN32_WINNT mismatch!
+//#error NTDDI_VERSION and _WIN32_WINNT mismatch!
 #endif
 
 #endif

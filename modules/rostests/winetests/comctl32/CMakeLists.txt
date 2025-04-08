@@ -1,5 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x502 -D_WIN32_IE=0x600)
+remove_definitions(-D_WIN32_WINNT=0x600-D_WIN32_IE=0x600)
 
 add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_LONGLONG)
 
