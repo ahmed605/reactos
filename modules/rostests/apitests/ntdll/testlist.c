@@ -126,7 +126,11 @@ extern void func_RtlxUnicodeStringToOemSize(void);
 extern void func_StackOverflow(void);
 extern void func_TimerResolution(void);
 extern void func_UserModeException(void);
+<<<<<<< HEAD
 extern void func_WakeAddress(void);
+=======
+extern void func_NtNotifyChangeMultipleKeys(void);
+>>>>>>> 10e6ae12d6c ([NTDLL_APITEST] feat: API test for user-mode synchronous and asynchronous notifications)
 
 const struct test winetest_testlist[] =
 {
@@ -259,6 +263,7 @@ const struct test winetest_testlist[] =
 #ifdef _M_AMD64
     { "RtlCaptureContext",              func_RtlCaptureContext },
 #endif
+    { "NtNotifyChangeMultipleKeys", func_NtNotifyChangeMultipleKeys },
 
     { 0, 0 }
 };

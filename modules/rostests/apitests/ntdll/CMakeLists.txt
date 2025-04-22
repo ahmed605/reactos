@@ -140,6 +140,7 @@ list(APPEND SOURCE
     SystemInfo.c
     UserModeException.c
     Timer.c
+    NtNotifyChangeMultipleKeys.c
     precomp.h)
 
 if(ARCH STREQUAL "i386")
