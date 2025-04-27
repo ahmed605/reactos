@@ -1685,6 +1685,7 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
         
         InitializeListHead(&(PostBlock->NotifyList));
         KeInitializeEvent(&(PostBlock->Event), NotificationEvent, FALSE);
+        PostBlock->Filter = CompletionFilter;
 
         /* Link post block to notify block */
         InsertHeadList(&(PostBlock->NotifyList), &(NotifyBlock->PostList));
