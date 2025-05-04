@@ -1630,7 +1630,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
     PAGED_CODE();
 
     DPRINT("NtNotifyChangeMultipleKeys(MasterKeyHandle=%p, Subordinate[%d]=%p, Event=%p, ApcRoutine=%p, ApcContext=%p, IoStatusBlock=%p, CompletionFilter=%d, WatchTree=%d, Buffer[%d]=%p, Asynchronous=%d)\n",
-        MasterKeyHandle, Count, SlaveObjects, Event, ApcRoutine, ApcContext, IoStatusBlock, CompletionFilter, WatchTree, Buffer, Length, Asynchronous);
+        MasterKeyHandle, Count, SubordinateObjects, Event, ApcRoutine, ApcContext, IoStatusBlock, CompletionFilter, WatchTree, Buffer, Length, Asynchronous);
 
     /* Validate flags */
     if ((CompletionFilter & REG_LEGAL_CHANGE_FILTER) != CompletionFilter)
@@ -1702,7 +1702,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                     Status = ProbeAndCaptureObjectAttributes(&LocalSubObjects[i],
                                                              &SubNames[i],
                                                              PreviousMode,
-                                                             &SlaveObjects[i],
+                                                             &SubordinateObjects[i],
                                                              FALSE);
                     if (!NT_SUCCESS(Status))
                         break;
