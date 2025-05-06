@@ -30,6 +30,7 @@
 #include "dshow.h"
 
 #include "qcap_main.h"
+#include "wine/strmbase.h"
 
 #include "wine/debug.h"
 

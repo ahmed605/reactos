@@ -19,6 +19,7 @@
  */
 
 #pragma once
+#include "wine/strmbase.h"
 
 typedef struct ParserImpl ParserImpl;
 

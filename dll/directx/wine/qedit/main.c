@@ -18,6 +18,7 @@
  */
 
 #include "qedit_private.h"
+#include "wine/strmbase.h"
 #include "rpcproxy.h"
 #include "wine/debug.h"
 

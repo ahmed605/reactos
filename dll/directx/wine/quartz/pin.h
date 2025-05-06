@@ -19,6 +19,7 @@
  */
 
 #pragma once
+#include "wine/strmbase.h"
 
 /* This function will process incoming samples to the pin.
  * Any return value valid in IMemInputPin::Receive is allowed here
