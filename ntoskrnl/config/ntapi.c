@@ -1669,6 +1669,9 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
     /* Block APCs */
     KeEnterCriticalRegion();
 
+    /* Block registry notifications */
+    CmpLockNotifyExclusive();
+
     /* Check for user-mode caller */
     if (PreviousMode != KernelMode)
     {
@@ -1727,29 +1730,6 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                 ExFreePoolWithTag(SubNames, TAG_CM);
             goto Quit;
         }
-    }
-
-    /* Lock the registry while we're setting up notifications */
-    CmpLockRegistryExclusive();
-
-    /* Lock the Kcb while we are initializing/updating NotifyBlock */
-    CmpAcquireKcbLockExclusive(KeyObject->KeyControlBlock);
-
-    /* Check if the registry key is deleted */
-    if (KeyObject->KeyControlBlock->Delete)
-    {
-        DPRINT("NtNotifyChangeMultipleKeys: MasterKeyHandle is marked for deletion.\n");
-        Status = STATUS_KEY_DELETED;
-        goto Failure;
-    }
-
-    /* Early return if there's a notification pending */
-    if (KeyObject->NotifyBlock && KeyObject->NotifyBlock->NotifyPending)
-    {
-        DPRINT("NtNotifyChangeMultipleKeys: Early-return on pending notification.\n");
-        KeyObject->NotifyBlock->NotifyPending = FALSE;
-        Status = STATUS_NOTIFY_ENUM_DIR;
-        goto Failure;
     }
 
     /* Open subordinate objects */
@@ -1813,12 +1793,32 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
             }
 
             /* Lock KCB for Subordinate objects */
-            CmpAcquireKcbLockExclusive(LocalSubObjectsKeyBody[i]->KeyControlBlock);
+            CmpAcquireKcbLockShared(LocalSubObjectsKeyBody[i]->KeyControlBlock);
         }
 
         /* The name is no longer needed */
         ExFreePoolWithTag(LocalSubObjects, TAG_CM);
         ExFreePoolWithTag(SubNames, TAG_CM);
+    }
+
+    /* Lock master key's KCB */
+    CmpAcquireKcbLockShared(KeyObject->KeyControlBlock);
+
+    /* Check if the registry key is deleted */
+    if (KeyObject->KeyControlBlock->Delete)
+    {
+        DPRINT("NtNotifyChangeMultipleKeys: MasterKeyHandle is marked for deletion.\n");
+        Status = STATUS_KEY_DELETED;
+        goto Failure2;
+    }
+
+    /* Early return if there's a notification pending */
+    if (KeyObject->NotifyBlock && KeyObject->NotifyBlock->NotifyPending)
+    {
+        DPRINT("NtNotifyChangeMultipleKeys: Early-return on pending notification.\n");
+        KeyObject->NotifyBlock->NotifyPending = FALSE;
+        Status = STATUS_NOTIFY_ENUM_DIR;
+        goto Failure2;
     }
 
     /* Allocate and initialize master NotifyBlock */
@@ -1828,7 +1828,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert NotifyBlock. (0x%lx)\n", Status);
-            goto Failure;
+            goto Failure2;
         }
         KeyObject->NotifyBlock = NotifyBlock;
     }
@@ -1848,7 +1848,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("NtNotifyChangeMultipleKeys: CmpConvertHandleToKernelHandle failed. (0x%lx)\n", Status);
-            goto Failure;
+            goto Failure2;
         }
 
         Status = ObReferenceObjectByHandle(LocalEventHandle,
@@ -1860,6 +1860,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("NtNotifyChangeMultipleKeys: Failed to reference event object. (0x%lx)\n", Status);
+            goto Failure2;
         }
         ZwClose(LocalEventHandle);
         LocalEventHandle = NULL;
@@ -1871,7 +1872,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("NtNotifyChangeMultipleKeys: Failed to create event object for synchronous call. (0x%lx)\n", Status);
-            goto Failure;
+            goto Failure2;
         }
         ZwClose(LocalEventHandle);
         LocalEventHandle = NULL;
@@ -1886,7 +1887,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert master PostBlock. (0x%lx)\n", Status);
-        goto Failure;
+        goto Failure2;
     }
     
     if (PreviousMode == KernelMode)
@@ -1906,7 +1907,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         if (!SubNotifyBlocks)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Failure;
+            goto Failure2;
         }
 
         /* Initialize a NotifyBlock and PostBlock for each subordinate */
@@ -1919,7 +1920,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate NotifyBlock. (0x%lx)\n", Status);
-                goto Failure;
+                goto Failure2;
             }
 
             /* Allocate PostBlock */
@@ -1931,7 +1932,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate PostBlock. (0x%lx)\n", Status);
-                goto Failure;
+                goto Failure2;
             }
             
             /* The object is no longer needed */
@@ -1953,7 +1954,8 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
 
     /* We are done with the NotifyBlock, unlock the KCB so now user can change registry keys */
     CmpReleaseKcbLock(KeyObject->KeyControlBlock);
-    CmpUnlockRegistry();
+    CmpUnlockNotify();
+    KeLeaveCriticalRegion();
 
     /* Initialize IO_STATUS_BLOCK */
     IoStatusBlock->Status = STATUS_PENDING;
@@ -1979,11 +1981,36 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
 
         /* FIXME: Report back the relative name of the changed using the Buffer */
 
+        /* FIXME: Read Status from IoStatusBlock -- return STATUS_NOTIFY_CLEANUP if event is set by closing the key handle */
+
         /* PostBlock is freed automatically when the event is signaled */
 
         Status = STATUS_NOTIFY_ENUM_DIR;
         goto Cleanup;
     }
+
+Failure2:
+    CmpReleaseKcbLock(KeyObject->KeyControlBlock);
+
+    if (LocalEventObject)
+        ObDereferenceObject(LocalEventObject);
+
+    if (LocalEventHandle)
+        ZwClose(LocalEventHandle);
+
+    if (NotifyBlock)
+    {
+        if (KeyObject->NotifyBlock == NotifyBlock)
+        {
+            RemoveEntryList(&(NotifyBlock->HiveList));
+            KeyObject->NotifyBlock = NULL;
+        }
+
+        ExFreePoolWithTag(NotifyBlock, TAG_CM);
+    }
+
+    if (PostBlock)
+        ExFreePoolWithTag(PostBlock, TAG_CM);
 
 Failure:
     if (LocalSubObjects)
@@ -2012,39 +2039,16 @@ Failure:
 
         ExFreePoolWithTag(SubNotifyBlocks, TAG_CM);
     }
-        
-    if (LocalEventObject)
-        ObDereferenceObject(LocalEventObject);
 
-    if (LocalEventHandle)
-        ZwClose(LocalEventHandle);
+    KeLeaveCriticalRegion();
 
-    if (NotifyBlock)
-    {
-        if (KeyObject->NotifyBlock == NotifyBlock)
-        {
-            RemoveEntryList(&(NotifyBlock->HiveList));
-            KeyObject->NotifyBlock = NULL;
-        }
-
-        ExFreePoolWithTag(NotifyBlock, TAG_CM);
-    }
-
-    if (PostBlock)
-        ExFreePoolWithTag(PostBlock, TAG_CM);
-
-    CmpReleaseKcbLock(KeyObject->KeyControlBlock);
-
-    CmpUnlockRegistry();
+    CmpUnlockNotify();
 
 Cleanup:
     if (KeyObject)
         ObDereferenceObject(KeyObject);
 
 Quit:
-    /* Bring back APCs */
-    KeLeaveCriticalRegion();
-
     return Status;
 }
 
