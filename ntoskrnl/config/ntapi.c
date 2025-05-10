@@ -1662,7 +1662,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT("NtNotifyChangeMultipleKeys: failed to open MasterKeyHandle.\n");
+        DPRINT1("NtNotifyChangeMultipleKeys: failed to open MasterKeyHandle. (0x%lx)\n", Status);
         return Status;
     }
 
@@ -1718,7 +1718,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
 
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("NtNotifyChangeMultipleKeys: Probing buffers failed.\n");
+            DPRINT1("NtNotifyChangeMultipleKeys: Probing buffers failed. (0x%lx)\n", Status);
             if (KeyObject)
                 ObDereferenceObject(KeyObject);
             if (LocalSubObjects)
@@ -1776,7 +1776,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                         &SubHandle);
             if (!NT_SUCCESS(Status))
             {
-                DPRINT("NtNotifyChangeMultipleKeys: Failed to open subordinate object handle.\n");
+                DPRINT1("NtNotifyChangeMultipleKeys: Failed to open subordinate object handle. (0x%lx)\n", Status);
                 goto Failure;
             }
 
@@ -1790,14 +1790,14 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
             ZwClose(SubHandle);
             if (!NT_SUCCESS(Status))
             {
-                DPRINT("NtNotifyChangeMultipleKeys: Failed to reference subordinate object.\n");
+                DPRINT1("NtNotifyChangeMultipleKeys: Failed to reference subordinate object. (0x%lx)\n", Status);
                 goto Failure;
             }
 
             /* Check if this is a duplicate object */
             if (LocalSubObjectsKeyBody[i]->KeyControlBlock == KeyObject->KeyControlBlock)
             {
-                DPRINT("NtNotifyChangeMultipleKeys: Duplicate subordinate object found.\n");
+                DPRINT1("NtNotifyChangeMultipleKeys: Duplicate subordinate object found.\n");
                 Status = STATUS_INVALID_PARAMETER;
                 goto Failure;
             }
@@ -1806,7 +1806,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
             {
                 if (LocalSubObjectsKeyBody[i]->KeyControlBlock == LocalSubObjectsKeyBody[j]->KeyControlBlock)
                 {
-                    DPRINT("NtNotifyChangeMultipleKeys: Duplicate subordinate object found.\n");
+                    DPRINT1("NtNotifyChangeMultipleKeys: Duplicate subordinate object found.\n");
                     Status = STATUS_INVALID_PARAMETER;
                     goto Failure;
                 }
@@ -1827,7 +1827,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         Status = CmpInsertNotifyBlock(KeyObject, CompletionFilter, WatchTree, &NotifyBlock);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("NtNotifyChangeMultipleKeys: Failed to allocate and insert NotifyBlock. (0x%lx)\n", Status);
+            DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert NotifyBlock. (0x%lx)\n", Status);
             goto Failure;
         }
         KeyObject->NotifyBlock = NotifyBlock;
@@ -1847,7 +1847,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                                 &LocalEventHandle);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("NtNotifyChangeMultipleKeys: CmpConvertHandleToKernelHandle failed with 0x%lx.\n", Status);
+            DPRINT1("NtNotifyChangeMultipleKeys: CmpConvertHandleToKernelHandle failed. (0x%lx)\n", Status);
             goto Failure;
         }
 
@@ -1859,7 +1859,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                            NULL);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("NtNotifyChangeMultipleKeys: Failed to reference event object.\n");
+            DPRINT1("NtNotifyChangeMultipleKeys: Failed to reference event object. (0x%lx)\n", Status);
         }
         ZwClose(LocalEventHandle);
         LocalEventHandle = NULL;
@@ -1870,7 +1870,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
         Status = CmpCreateEvent(NotificationEvent, &LocalEventHandle, &LocalEventObject);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("NtNotifyChangeMultipleKeys: Failed to create event object for synchronous call.\n");
+            DPRINT1("NtNotifyChangeMultipleKeys: Failed to create event object for synchronous call. (0x%lx)\n", Status);
             goto Failure;
         }
         ZwClose(LocalEventHandle);
@@ -1885,7 +1885,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                 &PostBlock);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT("NtNotifyChangeMultipleKeys: Failed to allocate and insert master PostBlock. (0x%lx)\n", Status);
+        DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert master PostBlock. (0x%lx)\n", Status);
         goto Failure;
     }
     
@@ -1918,7 +1918,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                           &SubNotifyBlocks[i]);
             if (!NT_SUCCESS(Status))
             {
-                DPRINT("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate NotifyBlock. (0x%lx)\n", Status);
+                DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate NotifyBlock. (0x%lx)\n", Status);
                 goto Failure;
             }
 
@@ -1930,7 +1930,7 @@ NtNotifyChangeMultipleKeys(_In_ HANDLE MasterKeyHandle,
                                            &SubPostBlock);
             if (!NT_SUCCESS(Status))
             {
-                DPRINT("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate PostBlock. (0x%lx)\n", Status);
+                DPRINT1("NtNotifyChangeMultipleKeys: Failed to allocate and insert subordinate PostBlock. (0x%lx)\n", Status);
                 goto Failure;
             }
             
