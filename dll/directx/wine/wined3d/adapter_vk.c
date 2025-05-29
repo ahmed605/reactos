@@ -21,7 +21,9 @@
 #include "wined3d_private.h"
 
 #include "wine/vulkan_driver.h"
-
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 
 static inline const struct wined3d_adapter_vk *wined3d_adapter_vk_const(const struct wined3d_adapter *adapter)
