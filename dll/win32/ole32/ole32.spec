@@ -94,6 +94,7 @@
 @ stdcall CoReleaseServerProcess()
 @ stdcall CoResumeClassObjects()
 # CoRetireServer
+@ stdcall CoGetApartmentType(ptr ptr)
 @ stdcall CoRevertToSelf()
 @ stdcall CoRevokeClassObject(long)
 @ stdcall CoRevokeInitializeSpy(int64)

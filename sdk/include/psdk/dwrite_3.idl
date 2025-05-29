@@ -53,9 +53,9 @@ typedef enum DWRITE_RENDERING_MODE1
 typedef enum DWRITE_FONT_PROPERTY_ID
 {
     DWRITE_FONT_PROPERTY_ID_NONE,
-    DWRITE_FONT_PROPERTY_ID_FAMILY_NAME,
-    DWRITE_FONT_PROPERTY_ID_PREFERRED_FAMILY_NAME,
-    DWRITE_FONT_PROPERTY_ID_FACE_NAME,
+    DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
+    DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FAMILY_NAME,
+    DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FACE_NAME,
     DWRITE_FONT_PROPERTY_ID_FULL_NAME,
     DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME,
     DWRITE_FONT_PROPERTY_ID_POSTSCRIPT_NAME,
@@ -65,7 +65,12 @@ typedef enum DWRITE_FONT_PROPERTY_ID
     DWRITE_FONT_PROPERTY_ID_WEIGHT,
     DWRITE_FONT_PROPERTY_ID_STRETCH,
     DWRITE_FONT_PROPERTY_ID_STYLE,
-    DWRITE_FONT_PROPERTY_ID_TOTAL
+    DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FACE_NAME,
+    DWRITE_FONT_PROPERTY_ID_TOTAL = DWRITE_FONT_PROPERTY_ID_STYLE + 1,
+    DWRITE_FONT_PROPERTY_ID_TOTAL_RS3 = DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FACE_NAME + 1,
+    DWRITE_FONT_PROPERTY_ID_FAMILY_NAME = DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FAMILY_NAME,
+    DWRITE_FONT_PROPERTY_ID_PREFERRED_FAMILY_NAME = DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
+    DWRITE_FONT_PROPERTY_ID_FACE_NAME = DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FACE_NAME,
 } DWRITE_FONT_PROPERTY_ID;
 
 typedef struct DWRITE_FONT_PROPERTY
@@ -74,6 +79,12 @@ typedef struct DWRITE_FONT_PROPERTY
     WCHAR const *propertyValue;
     WCHAR const *localeName;
 } DWRITE_FONT_PROPERTY;
+
+cpp_quote("#ifdef __cplusplus")
+cpp_quote("#define DWRITE_MAKE_FONT_AXIS_TAG(a,b,c,d) (static_cast<DWRITE_FONT_AXIS_TAG>(DWRITE_MAKE_OPENTYPE_TAG(a,b,c,d)))")
+cpp_quote("#else")
+cpp_quote("#define DWRITE_MAKE_FONT_AXIS_TAG(a,b,c,d) (DWRITE_MAKE_OPENTYPE_TAG(a,b,c,d))")
+cpp_quote("#endif")
 
 typedef enum DWRITE_FONT_AXIS_TAG
 {
@@ -208,10 +219,10 @@ interface IDWriteFontResource : IUnknown
     UINT32 GetFontFaceIndex();
     UINT32 GetFontAxisCount();
     HRESULT GetDefaultFontAxisValues(
-        DWRITE_FONT_AXIS_VALUE const *values,
+        DWRITE_FONT_AXIS_VALUE *values,
         UINT32 num_values);
     HRESULT GetFontAxisRanges(
-        DWRITE_FONT_AXIS_RANGE const *ranges,
+        DWRITE_FONT_AXIS_RANGE *ranges,
         UINT32 num_ranges);
     DWRITE_FONT_AXIS_ATTRIBUTES GetFontAxisAttributes(
         UINT32 axis);
@@ -465,6 +476,29 @@ interface IDWriteFontSet3 : IDWriteFontSet2
 [
     local,
     object,
+    uuid(eec175fc-bea9-4c86-8b53-ccbdd7df0c82)
+]
+interface IDWriteFontSet4 : IDWriteFontSet3
+{
+    UINT32 ConvertWeightStretchStyleToFontAxisValues(
+        DWRITE_FONT_AXIS_VALUE const *input_axis_values,
+        UINT32 input_axis_count,
+        DWRITE_FONT_WEIGHT weight,
+        DWRITE_FONT_STRETCH stretch,
+        DWRITE_FONT_STYLE style,
+        float size,
+        DWRITE_FONT_AXIS_VALUE *output_axis_values);
+    HRESULT GetMatchingFonts(
+        WCHAR const *family_name,
+        DWRITE_FONT_AXIS_VALUE const *axis_values,
+        UINT32 axis_value_count,
+        DWRITE_FONT_SIMULATIONS allowed_simulations,
+        IDWriteFontSet4 **fonts);
+}
+
+[
+    local,
+    object,
     uuid(d37d7598-09be-4222-a236-2081341cc1f2)
 ]
 interface IDWriteFontFace3 : IDWriteFontFace2
@@ -551,7 +585,7 @@ interface IDWriteTextFormat3 : IDWriteTextFormat2
         UINT32 num_values);
     UINT32 GetFontAxisValueCount();
     HRESULT GetFontAxisValues(
-        DWRITE_FONT_AXIS_VALUE const *axis_values,
+        DWRITE_FONT_AXIS_VALUE *axis_values,
         UINT32 num_values);
     DWRITE_AUTOMATIC_FONT_AXES GetAutomaticFontAxes();
     HRESULT SetAutomaticFontAxes(DWRITE_AUTOMATIC_FONT_AXES axes);
@@ -784,17 +818,37 @@ interface IDWriteFontFace5 : IDWriteFontFace4
     BOOL Equals(IDWriteFontFace *fontface);
 }
 
-typedef struct DWRITE_COLOR_GLYPH_RUN1
+[
+    local,
+    object,
+    uuid(c4b1fe1b-6e84-47d5-b54c-a597981b06ad)
+]
+interface IDWriteFontFace6 : IDWriteFontFace5
 {
-    DWRITE_GLYPH_RUN glyphRun;
-    DWRITE_GLYPH_RUN_DESCRIPTION *glyphRunDescription;
-    FLOAT baselineOriginX;
-    FLOAT baselineOriginY;
-    DWRITE_COLOR_F runColor;
-    UINT16 paletteIndex;
-    DWRITE_GLYPH_IMAGE_FORMATS glyphImageFormat;
-    DWRITE_MEASURING_MODE measuringMode;
-} DWRITE_COLOR_GLYPH_RUN1;
+    HRESULT GetFamilyNames(
+        DWRITE_FONT_FAMILY_MODEL font_family_model,
+        IDWriteLocalizedStrings **names);
+    HRESULT GetFaceNames(
+        DWRITE_FONT_FAMILY_MODEL font_family_model,
+        IDWriteLocalizedStrings **names);
+}
+
+typedef struct DWRITE_COLOR_GLYPH_RUN1 DWRITE_COLOR_GLYPH_RUN1;
+
+cpp_quote("struct DWRITE_COLOR_GLYPH_RUN1")
+cpp_quote("{")
+cpp_quote("    DWRITE_GLYPH_RUN glyphRun;")
+cpp_quote("    DWRITE_GLYPH_RUN_DESCRIPTION *glyphRunDescription;")
+cpp_quote("    FLOAT baselineOriginX;")
+cpp_quote("    FLOAT baselineOriginY;")
+cpp_quote("    DWRITE_COLOR_F runColor;")
+cpp_quote("    UINT16 paletteIndex;")
+cpp_quote("#ifdef _WIN64")
+cpp_quote("    UINT32 _pad;")
+cpp_quote("#endif")
+cpp_quote("    DWRITE_GLYPH_IMAGE_FORMATS glyphImageFormat;")
+cpp_quote("    DWRITE_MEASURING_MODE measuringMode;")
+cpp_quote("};")
 
 [
     local,
@@ -918,7 +972,7 @@ interface IDWriteInMemoryFontFileLoader : IDWriteFontFileLoader
 interface IDWriteFactory5 : IDWriteFactory4
 {
     HRESULT CreateFontSetBuilder(IDWriteFontSetBuilder1 **fontset_builder);
-    HRESULT CreateInMemoryFontFileLoader(IDWriteFontFileLoader **loader);
+    HRESULT CreateInMemoryFontFileLoader(IDWriteInMemoryFontFileLoader **loader);
     HRESULT CreateHttpFontFileLoader(
         WCHAR const *referrer_url,
         WCHAR const *extra_headers,

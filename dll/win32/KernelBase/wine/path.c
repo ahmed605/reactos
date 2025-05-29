@@ -508,6 +508,13 @@ HRESULT WINAPI PathCchAddBackslashEx(WCHAR *path, SIZE_T size, WCHAR **endptr, S
 
     return S_OK;
 }
+BOOL WINAPI DECLSPEC_HOTPATCH GetProductInfo( DWORD os_major, DWORD os_minor,
+                                              DWORD sp_major, DWORD sp_minor, DWORD *type )
+{
+    return RtlGetProductInfo( os_major, os_minor, sp_major, sp_minor, type );
+}
+
+
 INT WINAPI KERNELBASE_lstrlenW( LPCWSTR str );
 HRESULT WINAPI PathCchAddExtension(WCHAR *path, SIZE_T size, const WCHAR *extension)
 {
