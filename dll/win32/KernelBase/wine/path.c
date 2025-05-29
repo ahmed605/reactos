@@ -508,7 +508,7 @@ HRESULT WINAPI PathCchAddBackslashEx(WCHAR *path, SIZE_T size, WCHAR **endptr, S
 
     return S_OK;
 }
-
+INT WINAPI KERNELBASE_lstrlenW( LPCWSTR str );
 HRESULT WINAPI PathCchAddExtension(WCHAR *path, SIZE_T size, const WCHAR *extension)
 {
     const WCHAR *existing_extension, *next;
@@ -533,7 +533,7 @@ HRESULT WINAPI PathCchAddExtension(WCHAR *path, SIZE_T size, const WCHAR *extens
     if (FAILED(hr)) return hr;
     if (*existing_extension) return S_FALSE;
 
-    path_length = wcsnlen(path, size);
+    path_length = KERNELBASE_lstrlenW(path);
     dot_length = has_dot ? 0 : 1;
     extension_length = lstrlenW(extension);
 
@@ -767,7 +767,7 @@ HRESULT WINAPI PathCchRemoveBackslashEx(WCHAR *path, SIZE_T path_size, WCHAR **p
         return E_INVALIDARG;
     }
 
-    path_length = wcsnlen(path, path_size);
+    path_length = KERNELBASE_lstrlenW(path);
     if (path_length == path_size && !path[path_length]) return E_INVALIDARG;
 
     root_end = get_root_end(path);
