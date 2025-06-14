@@ -5595,4 +5595,6 @@ typedef struct
 } /* extern "C" */
 #endif /* defined(__cplusplus) */
 
+#define RTL_CONSTANT_STRING(s) { sizeof(s) - sizeof(s[0]), sizeof(s), (void*)s }
+
 #endif  /* __WINE_WINTERNL_H */

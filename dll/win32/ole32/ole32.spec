@@ -132,6 +132,7 @@
 @ stdcall CreatePointerMoniker(ptr ptr)
 # CreateStdProgressIndicator
 @ stdcall CreateStreamOnHGlobal(ptr long ptr)
+@ stdcall DestroyRunningObjectTable()
 # DcomChannelSetHResult
 @ stdcall DllDebugObjectRPCHook(long ptr)
 @ stdcall DllGetClassObject(ptr ptr ptr)
@@ -208,6 +209,7 @@
 @ stdcall MkParseDisplayName(ptr ptr ptr ptr)
 @ stdcall MonikerCommonPrefixWith(ptr ptr ptr)
 @ stub MonikerRelativePathTo
+@ stdcall Ole32DllGetClassObject(ptr ptr ptr)
 @ stdcall OleBuildVersion()
 @ stdcall OleConvertIStorageToOLESTREAM(ptr ptr)
 @ stub OleConvertIStorageToOLESTREAMEx

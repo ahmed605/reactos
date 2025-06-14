@@ -357,7 +357,9 @@ typedef enum tagCLSCTX {
   CLSCTX_NO_FAILURE_LOG       = 0x4000,
   CLSCTX_DISABLE_AAA          = 0x8000,
   CLSCTX_ENABLE_AAA           = 0x10000,
-  CLSCTX_FROM_DEFAULT_CONTEXT = 0x20000
+  CLSCTX_FROM_DEFAULT_CONTEXT = 0x20000,
+  CLSCTX_APPCONTAINER           = 0x00400000,
+  CLSCTX_PS_DLL                 = 0x80000000
 } CLSCTX;
 
 cpp_quote("#define CLSCTX_INPROC (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)")
@@ -800,7 +802,7 @@ typedef struct tagQUERYCONTEXT
     DWORD dwVersionLo;
 } QUERYCONTEXT;
 
-typedef [v1_enum] enum tagTYSPEC 
+typedef [v1_enum] enum tagTYSPEC
 {
     TYSPEC_CLSID,
     TYSPEC_FILEEXT,
