@@ -5,6 +5,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 list(APPEND SOURCE
 #   access.idl
+    activation.idl
     activaut.idl
     activdbg.idl
     activscp.idl
@@ -52,6 +53,8 @@ list(APPEND SOURCE
     exdisp.idl
     fusion.idl
     hlink.idl
+    hstring.idl
+    windows.foundation.idl
     htiface.idl
     htiframe.idl
     httprequest.idl
