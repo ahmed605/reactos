@@ -10,6 +10,7 @@ list(APPEND SOURCE
     activdbg.idl
     activscp.idl
     asptlb.idl
+    asyncinfo.idl
 #   asynot.idl
 #   asysta.idl
     atliface.idl
@@ -50,11 +51,11 @@ list(APPEND SOURCE
 #   dyngraph.idl
     emptyvc.idl
     endpointvolume.idl
+    eventtoken.idl
     exdisp.idl
     fusion.idl
     hlink.idl
     hstring.idl
-    windows.foundation.idl
     htiface.idl
     htiframe.idl
     httprequest.idl
@@ -66,6 +67,8 @@ list(APPEND SOURCE
     indexsrv.idl
     inputscope.idl
     inseng.idl
+    inspectable.idl
+    ivectorchangedeventargs.idl
     mediaobj.idl
     metahost.idl
     mfidl.idl
@@ -142,6 +145,10 @@ list(APPEND SOURCE
     wia_xp.idl
     wincodec.idl
     wincodecsdk.idl
+    windows.data.json.idl
+    windows.foundation.collections.idl
+    windows.foundation.idl
+    windowscontracts.idl
     winsxs.idl
     wmdrmsdk.idl
     wmiutils.idl
