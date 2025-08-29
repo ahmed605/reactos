@@ -12,9 +12,15 @@ import json
 
 # These are modules we do not have, so redirect them to ones we do have.
 REDIRECT_HOSTS = {
+<<<<<<< HEAD
     'kernelbase.dll': 'kernel32.dll',
     'kernel.appcore.dll': 'kernel32.dll',
     'combase.dll': 'ole32.dll',
+=======
+    'kernelbase.dll': 'kernelbase.dll',
+    'kernel.appcore.dll': 'kernelbase.dll',
+    'combase.dll': 'combase.dll',
+>>>>>>> c8128862ee8 (push changes)
     'ucrtbase.dll': 'msvcrt.dll',
     'shcore.dll': 'shell32.dll',
     'winmmbase.dll': 'winmm.dll',
