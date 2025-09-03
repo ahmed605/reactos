@@ -306,6 +306,47 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
     /* Build up a unicode dll name from null-terminated string */
     RtlInitUnicodeString(&DllName, (LPWSTR)lpLibFileName);
 
+    /* If a full path is provided to a core system DLL, strip to base name so KnownDLLs applies */
+    if (DllName.Buffer)
+    {
+        PWCHAR p = DllName.Buffer;
+        PWCHAR lastSep = NULL;
+        while (*p)
+        {
+            if (*p == L'\\' || *p == L'/') lastSep = p;
+            p++;
+        }
+        if (lastSep)
+        {
+            PWCHAR base = lastSep + 1;
+            UNICODE_STRING bn;
+            UNICODE_STRING s;
+            BOOLEAN isCore = FALSE;
+
+            RtlInitUnicodeString(&bn, base);
+
+            RtlInitUnicodeString(&s, L"api-ms-win-");
+            if (RtlPrefixUnicodeString(&s, &bn, TRUE)) isCore = TRUE;
+
+            if (!isCore) { RtlInitUnicodeString(&s, L"kernel32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"kernelbase.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"ntdll.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"user32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"gdi32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"advapi32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"ole32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"shell32.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+            if (!isCore) { RtlInitUnicodeString(&s, L"bcrypt.dll"); if (RtlEqualUnicodeString(&bn, &s, TRUE)) isCore = TRUE; }
+
+            if (isCore)
+            {
+                DllName.Buffer = base;
+                DllName.Length = (USHORT)(wcslen(base) * sizeof(WCHAR));
+                DllName.MaximumLength = DllName.Length + sizeof(WCHAR);
+            }
+        }
+    }
+
     /* Lazy-initialize BasepExeLdrEntry */
     if (!BasepExeLdrEntry)
         LdrEnumerateLoadedModules(0, BasepLocateExeLdrEntry, NtCurrentPeb()->ImageBaseAddress);
