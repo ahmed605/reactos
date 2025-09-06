@@ -1317,6 +1317,112 @@ QSI_DEF(SystemNonPagedPoolInformation)
     return STATUS_NOT_IMPLEMENTED;
 }
 
+/* Class 66 - Big Pool Information */
+/* Minimal internal definitions for big pool info */
+typedef struct _SYSTEM_BIGPOOL_ENTRY
+{
+    /* Bit0 of this field is set if NonPaged */
+    PVOID VirtualAddress;
+    ULONG_PTR SizeInBytes;
+    union
+    {
+        UCHAR Tag[4];
+        ULONG TagUlong;
+    };
+} SYSTEM_BIGPOOL_ENTRY, *PSYSTEM_BIGPOOL_ENTRY;
+
+typedef struct _SYSTEM_BIGPOOL_INFORMATION
+{
+    ULONG Count;
+    SYSTEM_BIGPOOL_ENTRY AllocatedInfo[1];
+} SYSTEM_BIGPOOL_INFORMATION, *PSYSTEM_BIGPOOL_INFORMATION;
+
+/* External big pool tracker (from ARM3 pool implementation) */
+extern PVOID MmNonPagedPoolStart;
+extern PVOID MmNonPagedPoolEnd;
+extern PVOID MmPagedPoolStart;
+extern PVOID MmPagedPoolEnd;
+extern KSPIN_LOCK ExpLargePoolTableLock;
+extern SIZE_T PoolBigPageTableSize;
+typedef struct _POOL_TRACKER_BIG_PAGES
+{
+    PVOID Va;
+    ULONG Key;
+    ULONG NumberOfPages;
+    PVOID QuotaObject;
+} POOL_TRACKER_BIG_PAGES, *PPOOL_TRACKER_BIG_PAGES;
+extern PPOOL_TRACKER_BIG_PAGES PoolBigPageTable;
+#define POOL_BIG_TABLE_ENTRY_FREE 0x1
+
+static __forceinline BOOLEAN
+SiIsNonPagedAddress(PVOID Va)
+{
+    return (Va >= MmNonPagedPoolStart && Va < MmNonPagedPoolEnd) ? TRUE : FALSE;
+}
+
+QSI_DEF(SystemBigPoolInformation)
+{
+    PSYSTEM_BIGPOOL_INFORMATION Out = (PSYSTEM_BIGPOOL_INFORMATION)Buffer;
+    ULONG Count = 0;
+    SIZE_T TableSize;
+    KIRQL OldIrql;
+    ULONG Required;
+    SIZE_T i;
+
+    /* First pass: count active big-pool entries */
+    KeAcquireSpinLock(&ExpLargePoolTableLock, &OldIrql);
+    TableSize = PoolBigPageTableSize;
+    for (i = 0; i < TableSize; ++i)
+    {
+        if (!((ULONG_PTR)PoolBigPageTable[i].Va & POOL_BIG_TABLE_ENTRY_FREE))
+            ++Count;
+    }
+    KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+
+    /* Compute required size */
+    if (Count == 0)
+    {
+        Required = sizeof(SYSTEM_BIGPOOL_INFORMATION);
+        if (Size < Required)
+        {
+            *ReqSize = Required;
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+        Out->Count = 0;
+        *ReqSize = Required;
+        return STATUS_SUCCESS;
+    }
+
+    Required = FIELD_OFFSET(SYSTEM_BIGPOOL_INFORMATION, AllocatedInfo) + Count * sizeof(SYSTEM_BIGPOOL_ENTRY);
+    if (Size < Required)
+    {
+        *ReqSize = Required;
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    /* Second pass: fill entries */
+    KeAcquireSpinLock(&ExpLargePoolTableLock, &OldIrql);
+    TableSize = PoolBigPageTableSize;
+    Out->Count = 0;
+    for (i = 0; i < TableSize; ++i)
+    {
+        PVOID Va = PoolBigPageTable[i].Va;
+        if (!((ULONG_PTR)Va & POOL_BIG_TABLE_ENTRY_FREE))
+        {
+            PSYSTEM_BIGPOOL_ENTRY E = &Out->AllocatedInfo[Out->Count++];
+            BOOLEAN NonPaged = SiIsNonPagedAddress(Va);
+            /* Encode NonPaged in bit0 of VirtualAddress as per Windows contract */
+            E->VirtualAddress = (PVOID)(((ULONG_PTR)Va) | (NonPaged ? 1 : 0));
+            E->SizeInBytes = (ULONG_PTR)PoolBigPageTable[i].NumberOfPages * PAGE_SIZE;
+            E->TagUlong = PoolBigPageTable[i].Key;
+        }
+    }
+    KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+
+    *ReqSize = Required;
+    return STATUS_SUCCESS;
+}
+
 /* Class 16 - Handle Information */
 QSI_DEF(SystemHandleInformation)
 {
@@ -2734,6 +2840,64 @@ QSI_DEF(SystemLogicalProcessorInformation)
     return Status;
 }
 
+/* Class 90 - Boot Environment Information */
+/* Local V1 layout for downlevel builds: GUID + ULONG FirmwareType */
+typedef struct _ROS_SYSTEM_BOOT_ENVIRONMENT_V1
+{
+    GUID BootIdentifier;
+    ULONG FirmwareType; /* 0=Unknown, 1=Bios, 2=Uefi */
+} ROS_SYSTEM_BOOT_ENVIRONMENT_V1, *PROS_SYSTEM_BOOT_ENVIRONMENT_V1;
+
+QSI_DEF(SystemBootEnvironmentInformation)
+{
+    ULONG Needed = sizeof(ROS_SYSTEM_BOOT_ENVIRONMENT_V1);
+    ROS_SYSTEM_BOOT_ENVIRONMENT_V1 *Info;
+
+    *ReqSize = Needed;
+    if (Size < Needed)
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    Info = (ROS_SYSTEM_BOOT_ENVIRONMENT_V1 *)Buffer;
+    RtlZeroMemory(Info, sizeof(*Info));
+    /* TODO: If/when ROS tracks a persistent boot identifier, set it here. */
+    /* Assume BIOS unless we can detect UEFI elsewhere. */
+    Info->FirmwareType = 1; /* Bios */
+    return STATUS_SUCCESS;
+}
+
+/* Class 98/99 - System partition/disk information (minimal stub) */
+typedef struct _ROS_SYSTEM_SYSTEM_PARTITION_INFORMATION
+{
+    UNICODE_STRING SystemPartition;
+} ROS_SYSTEM_SYSTEM_PARTITION_INFORMATION, *PROS_SYSTEM_SYSTEM_PARTITION_INFORMATION;
+
+typedef struct _ROS_SYSTEM_SYSTEM_DISK_INFORMATION
+{
+    UNICODE_STRING SystemDisk;
+} ROS_SYSTEM_SYSTEM_DISK_INFORMATION, *PROS_SYSTEM_SYSTEM_DISK_INFORMATION;
+
+QSI_DEF(SystemSystemPartitionInformation)
+{
+    *ReqSize = sizeof(ROS_SYSTEM_SYSTEM_PARTITION_INFORMATION);
+    if (Size < *ReqSize) return STATUS_INFO_LENGTH_MISMATCH;
+    PROS_SYSTEM_SYSTEM_PARTITION_INFORMATION Info = (PROS_SYSTEM_SYSTEM_PARTITION_INFORMATION)Buffer;
+    RtlZeroMemory(Info, sizeof(*Info));
+    /* TODO: Populate from ARC/BCD when available */
+    return STATUS_SUCCESS;
+}
+
+QSI_DEF(SystemSystemDiskInformation)
+{
+    *ReqSize = sizeof(ROS_SYSTEM_SYSTEM_DISK_INFORMATION);
+    if (Size < *ReqSize) return STATUS_INFO_LENGTH_MISMATCH;
+    PROS_SYSTEM_SYSTEM_DISK_INFORMATION Info = (PROS_SYSTEM_SYSTEM_DISK_INFORMATION)Buffer;
+    RtlZeroMemory(Info, sizeof(*Info));
+    /* TODO: Populate from ARC/BCD when available */
+    return STATUS_SUCCESS;
+}
+
 /* Class 76 - System firmware table information */
 QSI_DEF(SystemFirmwareTableInformation)
 {
@@ -2922,7 +3086,7 @@ CallQS[] =
     SI_XX(SystemEmulationProcessorInformation), /* FIXME: not implemented */
     SI_QX(SystemExtendedHandleInformation),
     SI_XX(SystemLostDelayedWriteInformation), /* FIXME: not implemented */
-    SI_XX(SystemBigPoolInformation), /* FIXME: not implemented */
+    SI_QX(SystemBigPoolInformation),
     SI_XX(SystemSessionPoolTagInformation), /* FIXME: not implemented */
     SI_XX(SystemSessionMappedViewInformation), /* FIXME: not implemented */
     SI_XX(SystemHotpatchInformation), /* FIXME: not implemented */
@@ -2933,6 +3097,29 @@ CallQS[] =
     SI_XX(SystemWow64SharedInformation), /* FIXME: not implemented */
     SI_XX(SystemRegisterFirmwareTableInformationHandler), /* FIXME: not implemented */
     SI_QX(SystemFirmwareTableInformation),
+    SI_XX(SystemModuleInformationEx), /* FIXME: not implemented */
+    SI_XX(SystemVerifierTriageInformation), /* FIXME: not implemented */
+    SI_XX(SystemSuperfetchInformation), /* FIXME: not implemented */
+    SI_XX(SystemMemoryListInformation), /* FIXME: not implemented */
+    SI_XX(SystemFileCacheInformationEx), /* FIXME: not implemented */
+    SI_XX(SystemThreadPriorityClientIdInformation), /* FIXME: not implemented */
+    SI_XX(SystemProcessorIdleCycleTimeInformation), /* FIXME: not implemented */
+    SI_XX(SystemVerifierCancellationInformation), /* FIXME: not implemented */
+    SI_XX(SystemProcessorPowerInformationEx), /* FIXME: not implemented */
+    SI_XX(SystemRefTraceInformation), /* FIXME: not implemented */
+    SI_XX(SystemSpecialPoolInformation), /* FIXME: not implemented */
+    SI_XX(SystemProcessIdInformation), /* FIXME: not implemented */
+    SI_XX(SystemErrorPortInformation), /* FIXME: not implemented */
+    SI_QX(SystemBootEnvironmentInformation),
+    SI_XX(SystemHypervisorInformation), /* FIXME: not implemented */
+    SI_XX(SystemVerifierInformationEx), /* FIXME: not implemented */
+    SI_QS(SystemCurrentTimeZoneInformation),
+    SI_XX(SystemImageFileExecutionOptionsInformation), /* FIXME: not implemented */
+    SI_XX(SystemCoverageInformation), /* FIXME: not implemented */
+    SI_XX(SystemPrefetchPathInformation), /* FIXME: not implemented */
+    SI_XX(SystemVerifierFaultsInformation), /* FIXME: not implemented */
+    SI_XX(SystemSystemPartitionInformation), /* FIXME: not implemented */
+    SI_XX(SystemSystemDiskInformation), /* FIXME: not implemented */
 };
 
 C_ASSERT(SystemBasicInformation == 0);
