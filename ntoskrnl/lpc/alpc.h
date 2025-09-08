@@ -484,4 +484,15 @@ typedef struct _ALPC_COMMUNICATION_INFO
     KALPC_MESSAGE* CloseMessage;                                    //0x24
 } ALPC_COMMUNICATION_INFO, *PALPC_COMMUNICATION_INFO;
 
+
+/* private */
+NTSTATUS
+NTAPI
+AlpcpCreateConnectionPort(HANDLE *PortHandle, 
+                          POBJECT_ATTRIBUTES ObjectAttributes,
+                          PALPC_PORT_ATTRIBUTES PortAttributes,
+                          SIZE_T MaxMessageLength,
+                          BOOLEAN Waitable,
+                          BOOLEAN LegacyPort);
+
 #endif // _NTOSKRNL_ALPC_H_

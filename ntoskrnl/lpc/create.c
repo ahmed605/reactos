@@ -19,10 +19,11 @@ NtCreatePort(
     _In_ ULONG MaxMessageLength,
     _In_ ULONG MaxPoolUsage)
 {
-    PAGED_CODE();
-        UNIMPLEMENTED;
-    __debugbreak();
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+    KeGetCurrentThread()->KernelApcDisable -= 1;
+    Status = AlpcpCreateConnectionPort(PortHandle, ObjectAttributes, NULL, MaxMessageLength, FALSE, TRUE);
+    KeLeaveCriticalRegion();
+    return Status;
 }
 
 NTSTATUS
@@ -34,9 +35,11 @@ NtCreateWaitablePort(
     _In_ ULONG MaxDataLength,
     _In_opt_ ULONG NPMessageQueueSize)
 {
-    UNIMPLEMENTED;
-    __debugbreak();
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+    KeGetCurrentThread()->KernelApcDisable -= 1;
+    Status = AlpcpCreateConnectionPort(PortHandle, ObjectAttributes, NULL, MaxDataLength, TRUE, TRUE);
+    KeLeaveCriticalRegion();
+    return Status;
 }
 
 /* EOF */

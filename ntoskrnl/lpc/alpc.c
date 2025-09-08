@@ -16,3 +16,17 @@ AlpcPortGenericMapping =
             STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,        // GenericExecute
             PORT_ALL_ACCESS                               // GenericAll
 };
+
+NTSTATUS
+NTAPI
+AlpcpCreateConnectionPort(HANDLE *PortHandle, 
+                          POBJECT_ATTRIBUTES ObjectAttributes,
+                          PALPC_PORT_ATTRIBUTES PortAttributes,
+                          SIZE_T MaxMessageLength,
+                          BOOLEAN Waitable,
+                          BOOLEAN LegacyPort)
+{
+    UNIMPLEMENTED;
+    __debugbreak();
+    return STATUS_NOT_IMPLEMENTED;
+}
