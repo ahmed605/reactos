@@ -61,6 +61,9 @@ typedef struct _ALPC_PORT_ATTRIBUTES
 // end_rev
 
 
+#define ALPC_COMPLETION_LIST_BUFFER_GRANULARITY_MASK 0x3f // dbg
+
+
 // symbols
 typedef struct _ALPC_COMPLETION_LIST_STATE
 {
@@ -70,9 +73,13 @@ typedef struct _ALPC_COMPLETION_LIST_STATE
 		{
 			ULONG64 Head : 24;
 			ULONG64 Tail : 24;
-    #define ALPC_LISTEN_MAP_ENTRY 0x1 // Placeholder for context
-    typedef struct _ALPC_LISTEN_MAP_ENTRY { // Placeholder for context
-        LIST_ENTRY Entry; // Placeholder for context
+			ULONG64 ActiveThreadCount : 16;
+		} s1;
+		ULONG64 Value;
+	} u1;
+} ALPC_COMPLETION_LIST_STATE, *PALPC_COMPLETION_LIST_STATE;
+
+// symbols
 typedef struct DECLSPEC_ALIGN(128) _ALPC_COMPLETION_LIST_HEADER
 {
 	ULONG64 StartMagic;
