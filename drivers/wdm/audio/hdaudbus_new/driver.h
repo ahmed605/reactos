@@ -23,7 +23,7 @@ extern "C" {
 
 #include <wdm.h>
 #include <wdmguid.h>
-#include <wdf.h>
+#include <wdf/kmdf/1.17/wdf.h>
 #include <ntintsafe.h>
 #include <ntstrsafe.h>
 #include <hdaudio.h>
@@ -46,6 +46,10 @@ extern "C" {
 #define VEN_VMWARE 0x15AD
 
 #include "regfuncs.h"
+
+#define MAXUINT64 ((UINT64)~ ((UINT64)0))
+#define MAXULONG64 ((ULONG64)~ ((ULONG64)0))
+#define MAXULONG32 ((ULONG32) ~((ULONG32)0))
 
 NTSTATUS HDA_WaitForTransfer(
 	PFDO_CONTEXT fdoCtx,
