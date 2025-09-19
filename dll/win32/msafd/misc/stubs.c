@@ -81,60 +81,14 @@ WSPConnectEx(
     OUT LPDWORD lpdwBytesSent,
     IN OUT LPOVERLAPPED lpOverlapped)
 {
-    INT Errno = 0;
-    DWORD BytesSentLocal = 0;
-
-    /* Per ConnectEx contract, an OVERLAPPED must be supplied */
-    if (!lpOverlapped)
-    {
+    if (lpOverlapped) {
+        // Async not supported, fail
         if (lpdwBytesSent) *lpdwBytesSent = 0;
-        SetLastError(WSAEINVAL);
+        if (lpOverlapped) lpOverlapped->Internal = WSAEOPNOTSUPP;
         return FALSE;
     }
-
     if (lpdwBytesSent) *lpdwBytesSent = 0;
-
-    /* Perform the connect synchronously using the provider connect */
-    if (WSPConnect(s, name, namelen, NULL, NULL, NULL, NULL, &Errno) == SOCKET_ERROR)
-    {
-        SetLastError(Errno);
-        return FALSE;
-    }
-
-    /* Optionally send initial data after a successful connect */
-    if (dwSendDataLength > 0)
-    {
-        if (!lpSendBuffer)
-        {
-            SetLastError(WSAEFAULT);
-            return FALSE;
-        }
-
-        WSABUF Buf;
-        Buf.buf = (CHAR*)lpSendBuffer;
-        Buf.len = dwSendDataLength;
-
-        Errno = 0;
-        if (WSPSend(s,
-                    &Buf,
-                    1,
-                    &BytesSentLocal,
-                    0,
-                    NULL,
-                    NULL,
-                    NULL,
-                    &Errno) == SOCKET_ERROR)
-        {
-            SetLastError(Errno);
-            return FALSE;
-        }
-
-        if (lpdwBytesSent) *lpdwBytesSent = BytesSentLocal;
-    }
-
-    /* Completed synchronously */
-    SetLastError(ERROR_SUCCESS);
-    return TRUE;
+    return FALSE;
 }
 
 BOOL
