@@ -1763,3 +1763,5 @@
  
 @ stdcall -version=0x602+ -stub RtlAddGrowableFunctionTable(ptr ptr ptr)
 @ stdcall ApiSetQueryApiSetPresence(wstr ptr)
+
+@ stdcall NtOpenKeyEx(ptr ptr ptr ptr)
