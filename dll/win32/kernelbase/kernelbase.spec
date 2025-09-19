@@ -23,6 +23,7 @@
 @ stdcall AddConsoleAliasA(str str str)
 @ stdcall AddConsoleAliasW(wstr wstr wstr)
 @ stdcall AddDllDirectory(wstr)
+@ stdcall -stub -version=0x600+ SetProcessDEPPolicy(ptr)
 @ stdcall AddMandatoryAce(ptr long long long ptr)
 @ stdcall AddRefActCtx(ptr)
 # @ stub AddResourceAttributeAce

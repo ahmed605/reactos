@@ -36,6 +36,7 @@ target_compile_definitions(ntkrnlmp PRIVATE CONFIG_SMP)
 if(STACK_PROTECTOR)
     target_sources(ntkrnlmp PRIVATE $<TARGET_OBJECTS:gcc_ssp_nt>)
 endif()
+    target_compile_options(ntkrnlmp PRIVATE /wd4133 /wd4276)
 
 target_link_libraries(ntkrnlmp cportlib csq ${PSEH_LIB} arbiter cmlib ntlsalib rtl ${ROSSYM_LIB} libcntpr wdmguid ioevent)
 add_importlibs(ntkrnlmp hal kdcom bootvid)
