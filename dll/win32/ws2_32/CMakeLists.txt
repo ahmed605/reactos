@@ -11,6 +11,7 @@ list(APPEND SOURCE
     src/addrinfo.c
     src/async.c
     src/bhook.c
+    src/connectex.c
     src/dcatalog.c
     src/dcatitem.c
     src/dllmain.c

@@ -30,12 +30,7 @@
 
 // Address Object Option IDs for TDI/TCPIP
 #define AO_OPTION_KEEPALIVE      0x00000008
-#define AO_OPTION_TTL            0x00000004
-#define AO_OPTION_IP_DONTFRAGMENT 0x00000020
-#define AO_OPTION_IP_HDRINCL     0x00000010
-#define AO_OPTION_BROADCAST      0x00000002
-#define TCP_SOCKET_NODELAY       0x00000001
-#define IOCTL_TCP_SET_INFORMATION_EX 0x00120094
+
 
 typedef enum _SOCKET_STATE {
     SocketStateCreated,

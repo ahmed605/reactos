@@ -17,6 +17,17 @@
 extern "C" {
 #endif
 
+BOOL
+WINAPI
+ConnectEx(
+  SOCKET s,
+  const struct sockaddr *name,
+  int namelen,
+  PVOID lpSendBuffer,
+  DWORD dwSendDataLength,
+  LPDWORD lpdwBytesSent,
+  LPOVERLAPPED lpOverlapped);
+
 #include <mswsockdef.h>
 
 #define SO_CONNDATA               0x7000
