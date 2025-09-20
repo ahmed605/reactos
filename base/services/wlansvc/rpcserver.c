@@ -115,8 +115,7 @@ DWORD _RpcEnumInterfaces(
     WLANSVC_RPC_HANDLE hClientHandle,
     PWLAN_INTERFACE_INFO_LIST *ppInterfaceList)
 {
-#if GET_IF_ENTRY2_IMPLEMENTED
-    DWORD dwNumInterfaces;
+    DWORD dwNumInterfaces = 0;
     DWORD dwResult, dwSize;
     DWORD dwIndex;
     MIB_IF_ROW2 IfRow;
@@ -126,19 +125,13 @@ DWORD _RpcEnumInterfaces(
     dwSize = sizeof(WLAN_INTERFACE_INFO_LIST);
     if (dwResult != NO_ERROR)
     {
-        /* set num interfaces to zero when an error occurs */
         dwNumInterfaces = 0;
     }
-    else
+    else if (dwNumInterfaces > 1)
     {
-        if (dwNumInterfaces > 1)
-        {
-            /* add extra size for interface */
-            dwSize += (dwNumInterfaces-1) * sizeof(WLAN_INTERFACE_INFO);
-        }
+        dwSize += (dwNumInterfaces - 1) * sizeof(WLAN_INTERFACE_INFO);
     }
 
-    /* allocate interface list */
     InterfaceList = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwSize);
     if (!InterfaceList)
     {
@@ -151,7 +144,7 @@ DWORD _RpcEnumInterfaces(
         return ERROR_SUCCESS;
     }
 
-    for(dwIndex = 0; dwIndex < dwNumInterfaces; dwIndex++)
+    for (dwIndex = 0; dwIndex < dwNumInterfaces; dwIndex++)
     {
         ZeroMemory(&IfRow, sizeof(MIB_IF_ROW2));
         IfRow.InterfaceIndex = dwIndex;
@@ -163,17 +156,14 @@ DWORD _RpcEnumInterfaces(
             {
                 RtlMoveMemory(&InterfaceList->InterfaceInfo[InterfaceList->dwNumberOfItems].InterfaceGuid, &IfRow.InterfaceGuid, sizeof(GUID));
                 wcscpy(InterfaceList->InterfaceInfo[InterfaceList->dwNumberOfItems].strInterfaceDescription, IfRow.Description);
-                //FIXME set state
+                // TODO: Set isState properly
+                InterfaceList->InterfaceInfo[InterfaceList->dwNumberOfItems].isState = wlan_interface_state_not_ready;
                 InterfaceList->dwNumberOfItems++;
             }
         }
     }
 
     return ERROR_SUCCESS;
-#else
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-#endif
 }
 
 DWORD _RpcSetAutoConfigParameter(
