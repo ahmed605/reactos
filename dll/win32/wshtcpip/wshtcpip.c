@@ -170,10 +170,9 @@ GetTdiTypeId(
           *TdiType = INFO_TYPE_ADDRESS_OBJECT;
           switch (OptionName)
           {
-             case SO_KEEPALIVE:
-                /* FIXME: Return proper option */
-                ASSERT(FALSE);
-                break;
+                 case SO_KEEPALIVE:
+                     *TdiId = AO_OPTION_KEEPALIVE;
+                     return;
              default:
                 break;
           }
@@ -363,10 +362,13 @@ WSHIoctl(
         return res;
     }
 
+    if (IoControlCode == 0x98000004)
+    {
+        // Unhandled IOCTL, return WSAEINVAL
+        return WSAEINVAL;
+    }
     UNIMPLEMENTED;
-
     DPRINT1("Ioctl: Unknown IOCTL code: %x\n", IoControlCode);
-
     return WSAEINVAL;
 }
 
@@ -690,8 +692,12 @@ WSHSetSocketInformation(
                     return 0;
 
                 case SO_KEEPALIVE:
-                    /* FIXME -- We'll send this to TCPIP */
-                    DPRINT1("Set: SO_KEEPALIVE not yet supported\n");
+                    if (OptionLength < sizeof(BOOL))
+                    {
+                        return WSAEFAULT;
+                    }
+                    Context->KeepAlive = *(BOOL*)OptionValue;
+                    // TODO: Actually propagate to TCPIP driver
                     return 0;
 
                 default:

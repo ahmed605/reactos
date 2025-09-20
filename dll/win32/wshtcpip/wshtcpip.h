@@ -28,6 +28,10 @@
 #define DD_UDP_DEVICE_NAME      L"\\Device\\Udp"
 #define DD_RAW_IP_DEVICE_NAME   L"\\Device\\RawIp"
 
+// Address Object Option IDs for TDI/TCPIP
+#define AO_OPTION_KEEPALIVE      0x00000008
+
+
 typedef enum _SOCKET_STATE {
     SocketStateCreated,
     SocketStateBound,
@@ -50,6 +54,7 @@ typedef struct _SOCKET_CONTEXT {
     SOCKET_STATE SocketState;
     PQUEUED_REQUEST RequestQueue;
     BOOL DontRoute;
+    BOOL KeepAlive;
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
 INT
