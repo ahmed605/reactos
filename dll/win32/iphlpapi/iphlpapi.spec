@@ -172,3 +172,5 @@
 @ stdcall GetIpInterfaceTable(ptr ptr)
 @ stdcall GetIpForwardTable2(ptr ptr)
 @ stdcall NotifyRouteChange2(ptr ptr ptr long ptr)
+
+@ stdcall GetIpInterfaceEntry(ptr)

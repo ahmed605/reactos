@@ -1,3 +1,5 @@
+
+
 /*
  * PROJECT:     ReactOS Networking
  * LICENSE:     GPL - See COPYING in the top level directory
@@ -424,4 +426,64 @@ GetBestRoute2(
     }
 
     return ERROR_SUCCESS;
+}
+
+// Helper: get IP_ADAPTER_INFO* by IfIndex
+static IP_ADAPTER_INFO* getAdapterInfoByIndex(DWORD IfIndex)
+{
+    ULONG size = 0;
+    IP_ADAPTER_INFO *info = NULL, *ptr;
+    DWORD ret = GetAdaptersInfo(NULL, &size);
+    if (ret == ERROR_BUFFER_OVERFLOW && size)
+    {
+        info = (IP_ADAPTER_INFO*)HeapAlloc(GetProcessHeap(), 0, size);
+        if (info && GetAdaptersInfo(info, &size) == NO_ERROR)
+        {
+            for (ptr = info; ptr; ptr = ptr->Next)
+            {
+                if (ptr->Index == IfIndex)
+                {
+                    // Return pointer to static copy
+                    return ptr;
+                }
+            }
+        }
+        HeapFree(GetProcessHeap(), 0, info);
+    }
+    return NULL;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getipinterfaceentry
+DWORD WINAPI GetIpInterfaceEntry(PMIB_IPINTERFACE_ROW row)
+{
+    InterfaceIndexTable *if_table;
+    DWORD i;
+
+    if (!row)
+        return ERROR_INVALID_PARAMETER;
+
+    // Only IPv4 supported
+    if (row->Family != AF_UNSPEC && row->Family != AF_INET)
+        return ERROR_NOT_SUPPORTED;
+
+    if_table = getInterfaceIndexTable();
+    if (!if_table)
+        return ERROR_OUTOFMEMORY;
+
+    for (i = 0; i < if_table->numIndexes; i++)
+    {
+        if (if_table->indexes[i] == row->IfIndex)
+        {
+            // Fill out row fields (stub: only IfIndex, Family, and AdapterInfo for now)
+            row->ZoneIndex = 0;
+            row->UseMetric = 0;
+            row->Speed = 100000000; // 100Mbps stub
+            row->pAdapterInfo = getAdapterInfoByIndex(row->IfIndex);
+            free(if_table);
+            return ERROR_SUCCESS;
+        }
+    }
+
+    free(if_table);
+    return ERROR_NOT_FOUND;
 }

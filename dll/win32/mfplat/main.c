@@ -1,3 +1,14 @@
+#ifndef UI64_MAX
+#define UI64_MAX ((ULONGLONG)0xFFFFFFFFFFFFFFFFULL)
+#endif
+
+#ifndef I64_MAX
+#define I64_MAX ((LONGLONG)0x7FFFFFFFFFFFFFFFLL)
+#endif
+
+#ifndef I64_MIN
+#define I64_MIN ((LONGLONG)0x8000000000000000LL)
+#endif
 /*
  * Copyright 2014 Austin English
  *

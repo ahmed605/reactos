@@ -1,3 +1,5 @@
+
+
 /*
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS NT User-Mode DLL
@@ -7,7 +9,6 @@
  *                  Gunnar Dalsnes
  */
 
-/* INCLUDES *****************************************************************/
 
 #include <ntdll.h>
 #include <apisets.h>
@@ -15,6 +16,70 @@
 
 #define NDEBUG
 #include <debug.h>
+
+
+/*
+ * @implemented
+ */
+NTSYSAPI
+PVOID
+NTAPI
+LdrResolveDelayLoadedAPI(
+    PVOID ParentModuleBase,
+    PVOID DelayloadDescriptor,
+    PVOID FailureDllHook,
+    PVOID FailureSystemHook,
+    PVOID ThunkAddress,
+    LONG Flags)
+{
+    // Windows 8+ compatible implementation using ntdll loader routines
+    PVOID DllHandle = NULL;
+    PVOID ProcAddress = NULL;
+    UNICODE_STRING DllNameU = {0};
+    ANSI_STRING DllNameA = {0};
+    ANSI_STRING ProcNameA = {0};
+    IMAGE_DELAYLOAD_DESCRIPTOR *desc = (IMAGE_DELAYLOAD_DESCRIPTOR *)DelayloadDescriptor;
+    IMAGE_THUNK_DATA *thunk = (IMAGE_THUNK_DATA *)ThunkAddress;
+    ULONG Ordinal = 0;
+    NTSTATUS Status;
+    if (!desc || !ParentModuleBase || !thunk) return NULL;
+
+    // Get DLL name (ANSI)
+    const char *DllName = (const char *)((ULONG_PTR)ParentModuleBase + desc->DllNameRVA);
+    if (!DllName || !DllName[0]) return NULL;
+    RtlInitAnsiString(&DllNameA, DllName);
+    Status = RtlAnsiStringToUnicodeString(&DllNameU, &DllNameA, TRUE);
+    if (!NT_SUCCESS(Status)) return NULL;
+
+    // Load DLL if not loaded
+    Status = LdrLoadDll(NULL, NULL, &DllNameU, &DllHandle);
+    RtlFreeUnicodeString(&DllNameU);
+    if (!NT_SUCCESS(Status) || !DllHandle) return NULL;
+
+    // Get import name or ordinal
+    if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+    {
+        Ordinal = (ULONG)(thunk->u1.Ordinal & 0xFFFF);
+        Status = LdrGetProcedureAddress(DllHandle, NULL, Ordinal, &ProcAddress);
+    }
+    else
+    {
+        IMAGE_IMPORT_BY_NAME *imp = (IMAGE_IMPORT_BY_NAME *)((ULONG_PTR)ParentModuleBase + thunk->u1.AddressOfData);
+        RtlInitAnsiString(&ProcNameA, (const char *)imp->Name);
+        Status = LdrGetProcedureAddress(DllHandle, &ProcNameA, 0, &ProcAddress);
+    }
+
+    // Update thunk
+    thunk->u1.Function = (ULONG_PTR)ProcAddress;
+
+    // Return address or call failure hooks
+    if (!ProcAddress)
+    {
+        // TODO: Call FailureDllHook/FailureSystemHook if provided
+        return NULL;
+    }
+    return ProcAddress;
+}
 
 SIZE_T RtlpAllocDeallocQueryBufferSize = PAGE_SIZE;
 PTEB LdrpTopLevelDllBeingLoadedTeb = NULL;

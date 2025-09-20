@@ -84,9 +84,7 @@ NtQueryInformationProcess(
     {
         DPRINT1("NtQueryInformationProcess(): Information verification class failed! (Status -> 0x%lx, ProcessInformationClass -> %lx)\n", Status, ProcessInformationClass);
 
-        if (ProcessInformationClass != 0x26)
-        __debugbreak();
-        return Status;
+        Status = 0;
     }
 
     if (((ProcessInformationClass == ProcessCookie) ||

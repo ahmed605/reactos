@@ -3375,6 +3375,42 @@ NtSetInformationFile(IN HANDLE FileHandle,
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = 0;
     }
+    else if (FileInformationClass == 61)
+    {
+        DPRINT1("FileReplaceCompletionInformation not implemented\n");
+        // Handle replacing the completion port
+        // For now, just fail if not implemented
+        Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
+    else if (FileInformationClass == 0x29)
+    {
+        DPRINT1("FileIoCompletionNotificationInformation not implemented\n");
+        // Han1dle setting completion notification flags
+        // For now, just fail if not implemented
+        Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
+    else if (FileInformationClass == 0x2A)
+    {
+        DPRINT1("FileIoStatusBlockRangeInformation not implemented\n");
+        // Handle setting IOSB range
+        // For now, just fail if not implemented
+        Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
+    else if (FileInformationClass == 0x2B)
+    {
+        DPRINT1("FileIoPriorityHintInformation not implemented\n");
+        // Handle setting IO priority hint
+        // For now, just fail if not implemented
+        Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
     else if (FileInformationClass == FileRenameInformation ||
              FileInformationClass == FileLinkInformation ||
              FileInformationClass == FileMoveClusterInformation)

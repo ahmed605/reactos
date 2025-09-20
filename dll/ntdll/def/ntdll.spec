@@ -1766,3 +1766,5 @@
 @ stdcall ApiSetQueryApiSetPresence(wstr ptr)
 
 @ stdcall NtOpenKeyEx(ptr ptr ptr ptr)
+
+@ stdcall -version=0x602+ LdrResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long)

@@ -23,6 +23,7 @@
 @ stdcall MFAverageTimePerFrameToFrameRate(int64 ptr ptr)
 @ stdcall MFBeginCreateFile(long long long wstr ptr ptr ptr)
 @ stub MFBeginGetHostByName
+@ stub MFGetCallStackTracingWeakReference
 @ stdcall MFBeginRegisterWorkQueueWithMMCSS(long wstr long ptr ptr)
 @ stdcall MFBeginRegisterWorkQueueWithMMCSSEx(long wstr long long ptr ptr) rtworkq.RtwqBeginRegisterWorkQueueWithMMCSS
 @ stdcall MFBeginUnregisterWorkQueueWithMMCSS(long ptr ptr) rtworkq.RtwqBeginUnregisterWorkQueueWithMMCSS
