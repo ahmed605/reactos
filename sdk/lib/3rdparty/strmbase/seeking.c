@@ -18,19 +18,26 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
+/* FIXME: critical sections */
 
-#include "strmbase_private.h"
+#define COBJMACROS
 
-WINE_DEFAULT_DEBUG_CHANNEL(quartz);
+#include "dshow.h"
+#include "wine/strmbase.h"
+
+#include "uuids.h"
+#include "wine/debug.h"
+
+#include <assert.h>
+
+WINE_DEFAULT_DEBUG_CHANNEL(strmbase);
 
 static inline SourceSeeking *impl_from_IMediaSeeking(IMediaSeeking *iface)
 {
     return CONTAINING_RECORD(iface, SourceSeeking, IMediaSeeking_iface);
 }
 
-HRESULT strmbase_seeking_init(SourceSeeking *pSeeking, const IMediaSeekingVtbl *Vtbl,
-        SourceSeeking_ChangeStop fnChangeStop, SourceSeeking_ChangeStart fnChangeStart,
-        SourceSeeking_ChangeRate fnChangeRate)
+HRESULT SourceSeeking_Init(SourceSeeking *pSeeking, const IMediaSeekingVtbl *Vtbl, SourceSeeking_ChangeStop fnChangeStop, SourceSeeking_ChangeStart fnChangeStart, SourceSeeking_ChangeRate fnChangeRate, PCRITICAL_SECTION crit_sect)
 {
     assert(fnChangeStop && fnChangeStart && fnChangeRate);
 
@@ -49,16 +56,8 @@ HRESULT strmbase_seeking_init(SourceSeeking *pSeeking, const IMediaSeekingVtbl *
     pSeeking->llDuration = pSeeking->llStop;
     pSeeking->dRate = 1.0;
     pSeeking->timeformat = TIME_FORMAT_MEDIA_TIME;
-    if (!InitializeCriticalSectionEx(&pSeeking->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO))
-        InitializeCriticalSection(&pSeeking->cs);
-    pSeeking->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": SourceSeeking.cs");
+    pSeeking->crst = crit_sect;
     return S_OK;
-}
-
-void strmbase_seeking_cleanup(SourceSeeking *seeking)
-{
-    seeking->cs.DebugInfo->Spare[0] = 0;
-    DeleteCriticalSection(&seeking->cs);
 }
 
 HRESULT WINAPI SourceSeekingImpl_GetCapabilities(IMediaSeeking * iface, DWORD * pCapabilities)
@@ -113,9 +112,9 @@ HRESULT WINAPI SourceSeekingImpl_GetTimeFormat(IMediaSeeking * iface, GUID * pFo
     SourceSeeking *This = impl_from_IMediaSeeking(iface);
     TRACE("(%s)\n", debugstr_guid(pFormat));
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     *pFormat = This->timeformat;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -127,10 +126,10 @@ HRESULT WINAPI SourceSeekingImpl_IsUsingTimeFormat(IMediaSeeking * iface, const 
 
     TRACE("(%s)\n", debugstr_guid(pFormat));
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     if (!IsEqualIID(pFormat, &This->timeformat))
         hr = S_FALSE;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return hr;
 }
@@ -149,9 +148,9 @@ HRESULT WINAPI SourceSeekingImpl_GetDuration(IMediaSeeking * iface, LONGLONG * p
 
     TRACE("(%p)\n", pDuration);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     *pDuration = This->llDuration;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -162,9 +161,9 @@ HRESULT WINAPI SourceSeekingImpl_GetStopPosition(IMediaSeeking * iface, LONGLONG
 
     TRACE("(%p)\n", pStop);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     *pStop = This->llStop;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -176,9 +175,9 @@ HRESULT WINAPI SourceSeekingImpl_GetCurrentPosition(IMediaSeeking * iface, LONGL
 
     TRACE("(%p)\n", pCurrent);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     *pCurrent = This->llCurrent;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -222,11 +221,8 @@ HRESULT WINAPI SourceSeekingImpl_SetPositions(IMediaSeeking * iface, LONGLONG * 
     BOOL bChangeCurrent = FALSE, bChangeStop = FALSE;
     LONGLONG llNewCurrent, llNewStop;
 
-    TRACE("iface %p, current %s, current_flags %#lx, stop %s, stop_flags %#lx.\n", iface,
-            pCurrent ? debugstr_time(*pCurrent) : "<null>", dwCurrentFlags,
-            pStop ? debugstr_time(*pStop): "<null>", dwStopFlags);
-
-    EnterCriticalSection(&This->cs);
+    TRACE("(%p, %x, %p, %x)\n", pCurrent, dwCurrentFlags, pStop, dwStopFlags);
+    EnterCriticalSection(This->crst);
 
     llNewCurrent = Adjust(This->llCurrent, pCurrent, dwCurrentFlags);
     llNewStop = Adjust(This->llStop, pStop, dwStopFlags);
@@ -236,7 +232,7 @@ HRESULT WINAPI SourceSeekingImpl_SetPositions(IMediaSeeking * iface, LONGLONG * 
     if (llNewStop != This->llStop)
         bChangeStop = TRUE;
 
-    TRACE("Seeking from %s to %s.\n", debugstr_time(This->llCurrent), debugstr_time(llNewCurrent));
+    TRACE("Old: %u, New: %u\n", (DWORD)(This->llCurrent/10000000), (DWORD)(llNewCurrent/10000000));
 
     This->llCurrent = llNewCurrent;
     This->llStop = llNewStop;
@@ -245,7 +241,7 @@ HRESULT WINAPI SourceSeekingImpl_SetPositions(IMediaSeeking * iface, LONGLONG * 
         *pCurrent = llNewCurrent;
     if (pStop && (dwStopFlags & AM_SEEKING_ReturnTime))
         *pStop = llNewStop;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     if (bChangeCurrent)
         This->fnChangeStart(iface);
@@ -261,10 +257,10 @@ HRESULT WINAPI SourceSeekingImpl_GetPositions(IMediaSeeking * iface, LONGLONG * 
 
     TRACE("(%p, %p)\n", pCurrent, pStop);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     IMediaSeeking_GetCurrentPosition(iface, pCurrent);
     IMediaSeeking_GetStopPosition(iface, pStop);
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -275,10 +271,10 @@ HRESULT WINAPI SourceSeekingImpl_GetAvailable(IMediaSeeking * iface, LONGLONG * 
 
     TRACE("(%p, %p)\n", pEarliest, pLatest);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     *pEarliest = 0;
     *pLatest = This->llDuration;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }
@@ -297,11 +293,11 @@ HRESULT WINAPI SourceSeekingImpl_SetRate(IMediaSeeking * iface, double dRate)
         return VFW_E_UNSUPPORTED_AUDIO;
     }
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     This->dRate = dRate;
     if (bChangeRate)
         hr = This->fnChangeRate(iface);
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return hr;
 }
@@ -312,10 +308,10 @@ HRESULT WINAPI SourceSeekingImpl_GetRate(IMediaSeeking * iface, double * dRate)
 
     TRACE("(%p)\n", dRate);
 
-    EnterCriticalSection(&This->cs);
+    EnterCriticalSection(This->crst);
     /* Forward? */
     *dRate = This->dRate;
-    LeaveCriticalSection(&This->cs);
+    LeaveCriticalSection(This->crst);
 
     return S_OK;
 }

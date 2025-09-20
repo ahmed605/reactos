@@ -230,8 +230,6 @@ typedef unsigned short UINT16, *PUINT16;
 typedef ULONG_PTR KAFFINITY;
 typedef KAFFINITY *PKAFFINITY;
 
-#define MINLONGLONG             ((LONGLONG)~MAXLONGLONG)
-
 #ifdef __cplusplus
 }
 #endif

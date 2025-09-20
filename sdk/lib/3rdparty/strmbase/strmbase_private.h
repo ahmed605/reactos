@@ -18,16 +18,35 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __WINE_STRMBASE_PRIVATE_H
-#define __WINE_STRMBASE_PRIVATE_H
+#pragma once
 
-#include <assert.h>
-#define COBJMACROS
-#include "dshow.h"
-#include "uuids.h"
-#include "wine/debug.h"
-#include "wine/heap.h"
-#include "wine/list.h"
-#include "wine/strmbase.h"
+/* Quality Control */
+typedef struct QualityControlImpl {
+    IQualityControl IQualityControl_iface;
+    IPin *input;
+    IBaseFilter *self;
+    IQualityControl *tonotify;
 
-#endif /* __WINE_STRMBASE_PRIVATE_H */
+    /* Render stuff */
+    IReferenceClock *clock;
+    REFERENCE_TIME last_in_time, last_left, avg_duration, avg_pt, avg_render, start, stop;
+    REFERENCE_TIME current_jitter, current_rstart, current_rstop, clockstart;
+    double avg_rate;
+    LONG64 rendered, dropped;
+    BOOL qos_handled, is_dropped;
+} QualityControlImpl;
+
+HRESULT QualityControlImpl_Create(IPin *input, IBaseFilter *self, QualityControlImpl **ppv);
+void QualityControlImpl_Destroy(QualityControlImpl *This);
+HRESULT WINAPI QualityControlImpl_QueryInterface(IQualityControl *iface, REFIID riid, void **ppv);
+ULONG WINAPI QualityControlImpl_AddRef(IQualityControl *iface);
+ULONG WINAPI QualityControlImpl_Release(IQualityControl *iface);
+HRESULT WINAPI QualityControlImpl_Notify(IQualityControl *iface, IBaseFilter *sender, Quality qm);
+HRESULT WINAPI QualityControlImpl_SetSink(IQualityControl *iface, IQualityControl *tonotify);
+
+void QualityControlRender_Start(QualityControlImpl *This, REFERENCE_TIME tStart);
+void QualityControlRender_SetClock(QualityControlImpl *This, IReferenceClock *clock);
+HRESULT QualityControlRender_WaitFor(QualityControlImpl *This, IMediaSample *sample, HANDLE ev);
+void QualityControlRender_DoQOS(QualityControlImpl *priv);
+void QualityControlRender_BeginRender(QualityControlImpl *This);
+void QualityControlRender_EndRender(QualityControlImpl *This);

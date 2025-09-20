@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 Nikolay Sivov for CodeWeavers
+ * Copyright 2012 Stefan Leichter
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -16,9 +16,51 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <stdarg.h>
 #include "windef.h"
+#include "winbase.h"
+#include "wine/debug.h"
 
-LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+WINE_DEFAULT_DEBUG_CHANNEL(mf);
 
-/* @makedep: mf.rgs */
-1 WINE_REGISTRY mf.rgs
+BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
+{
+    TRACE("%p, %u, %p\n", hinst, reason, reserved);
+
+    switch (reason)
+    {
+        case DLL_PROCESS_ATTACH:
+            DisableThreadLibraryCalls( hinst );
+            break;
+    }
+    return TRUE;
+}
+#if 0
+HRESULT MFEnumDeviceSources(
+  PVOID  *pAttributes,
+  PVOID  ***pppSourceActivate,
+  UINT32        *pcSourceActivate
+)
+{
+    return 0;
+}
+
+
+HRESULT MFCreateDeviceSource(
+  PVOID *pAttributes,
+  PVOID **ppSource
+)
+{
+    return 0;
+}
+
+HRESULT MFGetService(
+  PVOID *punkObject,
+  PVOID guidService,
+  PVOID riid,
+  PVOID *ppvObject
+)
+{
+    return 0;
+}
+#endif
