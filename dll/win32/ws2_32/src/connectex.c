@@ -21,7 +21,6 @@ ConnectEx(
     LPOVERLAPPED lpOverlapped)
 {
     PWSSOCKET Socket;
-    INT Status;
     INT ErrorCode;
     DPRINT("ConnectEx: %lx, %p, %lx\n", s, name, namelen);
 
@@ -29,26 +28,20 @@ ConnectEx(
     {
         if ((Socket = WsSockGetSocket(s)))
         {
-            // Provider must implement ConnectEx as an extension
-            if (Socket->Provider->Service.lpWSPConnectEx)
-            {
-                Status = Socket->Provider->Service.lpWSPConnectEx(
-                    s,
-                    name,
-                    namelen,
-                    lpSendBuffer,
-                    dwSendDataLength,
-                    lpdwBytesSent,
-                    lpOverlapped,
-                    &ErrorCode);
-                WsSockDereference(Socket);
-                if (Status == ERROR_SUCCESS) return TRUE;
-            }
-            else
-            {
-                WsSockDereference(Socket);
-                ErrorCode = WSAEOPNOTSUPP;
-            }
+                GUID guidConnectEx = WSAID_CONNECTEX;
+                LPFN_CONNECTEX lpConnectEx = NULL;
+                DWORD bytesReturned = 0;
+
+                if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER,
+                             &guidConnectEx, sizeof(guidConnectEx),
+                             &lpConnectEx, sizeof(lpConnectEx),
+                             &bytesReturned, NULL, NULL) == SOCKET_ERROR || !lpConnectEx)
+                {
+                    SetLastError(WSAEOPNOTSUPP);
+                    return FALSE;
+                }
+
+                return lpConnectEx(s, name, namelen, lpSendBuffer, dwSendDataLength, lpdwBytesSent, lpOverlapped);
         }
         else
         {

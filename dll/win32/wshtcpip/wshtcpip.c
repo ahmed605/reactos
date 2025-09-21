@@ -362,12 +362,35 @@ WSHIoctl(
         return res;
     }
 
-    if (IoControlCode == 0x98000004)
+    switch (IoControlCode)
     {
-        // Unhandled IOCTL, return WSAEINVAL
-        return WSAEINVAL;
+        case SIO_IDEAL_SEND_BACKLOG_QUERY:
+            if (!OutputBuffer || OutputBufferLength < sizeof(DWORD))
+                return WSAEFAULT;
+            *(DWORD *)OutputBuffer = 0; /* unknown/back-compat */
+            if (NumberOfBytesReturned) *NumberOfBytesReturned = sizeof(DWORD);
+            if (NeedsCompletion) *NeedsCompletion = FALSE;
+            return NO_ERROR;
+
+        case SIO_KEEPALIVE_VALS:
+            if (!InputBuffer || InputBufferLength < sizeof(struct tcp_keepalive))
+                return WSAEFAULT;
+            if (NumberOfBytesReturned) *NumberOfBytesReturned = 0;
+            if (NeedsCompletion) *NeedsCompletion = FALSE;
+            return NO_ERROR;
+
+        case SIO_UDP_CONNRESET:
+            if (!InputBuffer || InputBufferLength < sizeof(BOOL))
+                return WSAEFAULT;
+            if (NumberOfBytesReturned) *NumberOfBytesReturned = 0;
+            if (NeedsCompletion) *NeedsCompletion = FALSE;
+            return NO_ERROR;
+
+        default:
+            break;
     }
-    UNIMPLEMENTED;
+
+    UNIMPLEMENTED_DBGBREAK();
     DPRINT1("Ioctl: Unknown IOCTL code: %x\n", IoControlCode);
     return WSAEINVAL;
 }
