@@ -1,0 +1,154 @@
+#ifndef _OPMAPI_H_
+#define _OPMAPI_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* OPM (Output Protection Manager) API definitions */
+
+#ifndef DXVA2API_H
+#include "dxva2api.h"
+#endif
+
+/* OPM data types */
+typedef BYTE OPM_OMAC[16];
+typedef BYTE OPM_ENCRYPTED_PARAMETERS[256];
+
+/* OPM structures */
+typedef struct _OPM_GET_INFO_PARAMETERS {
+    OPM_OMAC Omac;
+    OPM_ENCRYPTED_PARAMETERS RandomNumber;
+} OPM_GET_INFO_PARAMETERS, *POPM_GET_INFO_PARAMETERS;
+
+typedef struct _OPM_REQUESTED_INFORMATION {
+    OPM_OMAC Omac;
+    DWORD cbRequestedInformationSize;
+    BYTE RequestedInformation[4076];
+} OPM_REQUESTED_INFORMATION, *POPM_REQUESTED_INFORMATION;
+
+typedef struct _OPM_SET_PROTECTION_LEVEL_PARAMETERS {
+    DWORD ProtectionType;
+    DWORD ProtectionLevel;
+    OPM_OMAC Omac;
+    OPM_ENCRYPTED_PARAMETERS RandomNumber;
+} OPM_SET_PROTECTION_LEVEL_PARAMETERS, *POPM_SET_PROTECTION_LEVEL_PARAMETERS;
+
+typedef struct _OPM_SET_ACP_AND_CGMSA_SIGNALING_PARAMETERS {
+    DWORD ProtectionType;
+    DWORD ProtectionLevel;
+    DWORD ACPLevel;
+    DWORD CGMSALevel;
+    OPM_OMAC Omac;
+    OPM_ENCRYPTED_PARAMETERS RandomNumber;
+} OPM_SET_ACP_AND_CGMSA_SIGNALING_PARAMETERS, *POPM_SET_ACP_AND_CGMSA_SIGNALING_PARAMETERS;
+
+typedef struct _OPM_CONFIGURE_PARAMETERS {
+    DWORD ProtectionType;
+    DWORD ProtectionLevel;
+    DWORD ACPLevel;
+    DWORD CGMSALevel;
+    OPM_OMAC Omac;
+    OPM_ENCRYPTED_PARAMETERS RandomNumber;
+    DWORD ulAdditionalParametersSize;
+    BYTE AdditionalParameters[4056];
+} OPM_CONFIGURE_PARAMETERS, *POPM_CONFIGURE_PARAMETERS;
+
+typedef struct _OPM_COPP_COMPATIBLE_GET_INFO_PARAMETERS {
+    DWORD ProtectionType;
+    DWORD ProtectionLevel;
+    DWORD ACPLevel;
+    DWORD CGMSALevel;
+    OPM_OMAC Omac;
+    OPM_ENCRYPTED_PARAMETERS RandomNumber;
+} OPM_COPP_COMPATIBLE_GET_INFO_PARAMETERS, *POPM_COPP_COMPATIBLE_GET_INFO_PARAMETERS;
+
+/* OPM Video Output Semantics */
+typedef enum _OPM_VIDEO_OUTPUT_SEMANTICS {
+    OPM_VOS_COPP_SEMANTICS = 0,
+    OPM_VOS_OPM_SEMANTICS = 1,
+    OPM_VOS_OPM_INDIRECT_DISPLAY = 2
+} OPM_VIDEO_OUTPUT_SEMANTICS;
+
+/* OPM Status */
+typedef enum _OPM_STATUS {
+    OPM_STATUS_NORMAL = 0x00,
+    OPM_STATUS_LINK_LOST = 0x01,
+    OPM_STATUS_RENEGOTIATION_REQUIRED = 0x02,
+    OPM_STATUS_TAMPERING_DETECTED = 0x04,
+    OPM_STATUS_REVOKED_HDCP_DEVICE_ATTACHED = 0x08
+} OPM_STATUS;
+
+/* OPM Bus Type and Implementation */
+typedef enum _OPM_BUS_TYPE_AND_IMPLEMENTATION {
+    OPM_BUS_TYPE_OTHER = 0x00000000,
+    OPM_BUS_TYPE_PCI = 0x00000001,
+    OPM_BUS_TYPE_PCIX = 0x00000002,
+    OPM_BUS_TYPE_PCIEXPRESS = 0x00000003,
+    OPM_BUS_TYPE_AGP = 0x00000004,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_INSIDE_OF_CHIPSET = 0x00010000,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_TRACKS_ON_MOTHER_BOARD_TO_CHIP = 0x00020000,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_TRACKS_ON_MOTHER_BOARD_TO_SOCKET = 0x00030000,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_DAUGHTER_BOARD_CONNECTOR = 0x00040000,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_DAUGHTER_BOARD_CONNECTOR_INSIDE_OF_NUAE = 0x00050000,
+    OPM_BUS_IMPLEMENTATION_MODIFIER_NON_STANDARD = 0x80000000,
+} OPM_BUS_TYPE_AND_IMPLEMENTATION;
+
+/* OPM HDCP Protection Level */
+typedef enum _OPM_HDCP_PROTECTION_LEVEL {
+    OPM_HDCP_OFF = 0,
+    OPM_HDCP_ON = 1,
+    OPM_HDCP_FORCE_ULONG = 0x7fffffff
+} OPM_HDCP_PROTECTION_LEVEL;
+
+/* OPM DPCP Protection Level */
+typedef enum _OPM_DPCP_PROTECTION_LEVEL {
+    OPM_DPCP_OFF = 0,
+    OPM_DPCP_ON = 1,
+    OPM_DPCP_FORCE_ULONG = 0x7fffffff
+} OPM_DPCP_PROTECTION_LEVEL;
+
+/* OPM Type Enforcement */
+typedef enum _OPM_TYPE_ENFORCEMENT {
+    OPM_TYPE_ENFORCEMENT_HDCP = 0,
+    OPM_TYPE_ENFORCEMENT_DPCP = 1,
+    OPM_TYPE_ENFORCEMENT_FORCE_ULONG = 0x7fffffff
+} OPM_TYPE_ENFORCEMENT;
+
+/* Forward declaration for IOPMVideoOutput interface */
+#ifndef __IOPMVideoOutput_INTERFACE_DEFINED__
+#define __IOPMVideoOutput_INTERFACE_DEFINED__
+typedef struct IOPMVideoOutput IOPMVideoOutput;
+#endif
+
+/* OPM Interface IDs */
+DEFINE_GUID(IID_IOPMVideoOutput, 0x1e2e8b4a, 0x9a9a, 0x4e4e, 0x8f, 0x5f, 0x6b, 0x7c, 0x8d, 0x5a, 0x1d, 0x23);
+
+/* OPM function declarations */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+HRESULT WINAPI OPMGetVideoOutputsFromHMONITOR(
+    HMONITOR hMonitor,
+    OPM_VIDEO_OUTPUT_SEMANTICS vos,
+    ULONG *pulNumVideoOutputs,
+    IOPMVideoOutput ***pppOPMVideoOutputArray
+);
+
+HRESULT WINAPI OPMGetVideoOutputsFromIDirect3DDevice9Object(
+    IDirect3DDevice9 *pDevice,
+    OPM_VIDEO_OUTPUT_SEMANTICS vos,
+    ULONG *pulNumVideoOutputs,
+    IOPMVideoOutput ***pppOPMVideoOutputArray
+);
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _OPMAPI_H_ */

@@ -75,6 +75,13 @@ typedef enum _MC_DISPLAY_TECHNOLOGY_TYPE
     MC_FIELD_EMISSION_DEVICE
 } MC_DISPLAY_TECHNOLOGY_TYPE, *LPMC_DISPLAY_TECHNOLOGY_TYPE;
 
+/* Function declarations */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+BOOL WINAPI GetMonitorTechnologyType(HANDLE hMonitor, LPMC_DISPLAY_TECHNOLOGY_TYPE pdtyDisplayTechnologyType);
+
 #ifdef __cplusplus
 }
 #endif
