@@ -491,7 +491,6 @@ AtaCreateIdeDirectory(VOID)
      * We will handle fatal errors later via IoCreateDevice() call.
      */
 }
-
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -513,6 +512,7 @@ DriverEntry(
     }
     RtlCopyUnicodeString(&AtapDriverRegistryPath, RegistryPath);
     AtapDriverRegistryPath.Buffer[RegistryPath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+
 
     DriverObject->MajorFunction[IRP_MJ_CREATE] = AtaDispatchCreateClose;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = AtaDispatchCreateClose;

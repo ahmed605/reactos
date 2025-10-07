@@ -125,7 +125,6 @@ FxDmaEnabler::Initialize(
     NTSTATUS   status;
     DEVICE_DESCRIPTION deviceDescription;
     PFX_DRIVER_GLOBALS pFxDriverGlobals = GetDriverGlobals();
-
 #ifndef __REACTOS__
     ULONG mapRegistersAllocated;
 #endif

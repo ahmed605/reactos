@@ -240,7 +240,7 @@ IntValidateWindowStationHandle(
 
     if (WindowStation == NULL)
     {
-        ERR("Invalid window station handle\n");
+        ERR("Invalid window station handle (NULL)\n");
         EngSetLastError(ERROR_INVALID_HANDLE);
         return STATUS_INVALID_HANDLE;
     }

@@ -125,7 +125,6 @@ AddReg=Classes
 11,,wuapi.dll,1
 11,wbem,wbemdisp.dll,1
 11,wbem,wbemprox.dll,1
-11,,shellbtrfs.dll,1
 11,,zipfldr.dll,1
 11,,dsound.dll,1
 11,,xaudio2_7.dll,1

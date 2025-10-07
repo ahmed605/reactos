@@ -18,6 +18,30 @@ typedef struct _EX_WORKITEM_CONTEXT
 
 #define TAG_IOWI 'IWOI'
 
+static
+NTSTATUS
+NTAPI
+IopSynchronousCompletion(IN PDEVICE_OBJECT DeviceObject,
+                         IN PIRP Irp,
+                         IN PVOID Context)
+{
+    if (Irp->PendingReturned)
+        KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+IoCreateArcName(
+  _In_ PDEVICE_OBJECT DeviceObject
+)
+{
+    UNIMPLEMENTED;
+    return STATUS_SUCCESS;
+}
+
 NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
@@ -66,6 +90,52 @@ IoQueueWorkItemEx(
     IoQueueWorkItem(IoWorkItem, IopWorkItemExCallback, QueueType, newContext);
 }
 
+NTSTATUS
+NTAPI
+IoAllocateSfioStreamIdentifier(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ ULONG Length,
+  _In_ PVOID Signature,
+  _Out_ PVOID *StreamIdentifier)
+{
+    UNIMPLEMENTED;
+    *StreamIdentifier = NULL;
+    return STATUS_SUCCESS;
+}
+
+
+PVOID
+NTAPI
+IoGetSfioStreamIdentifier(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PVOID Signature)
+{
+    UNIMPLEMENTED;
+    return NULL;
+}
+
+NTSTATUS
+NTAPI
+IoFreeSfioStreamIdentifier(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PVOID Signature)
+{
+    UNIMPLEMENTED;
+    return STATUS_SUCCESS;
+}
+
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+IoSetActivityIdIrp(
+    _In_ PIRP    Irp,
+    _In_opt_ LPCGUID Guid
+)
+{
+    UNIMPLEMENTED;
+    return STATUS_UNSUCCESSFUL;
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTKRNLVISTAAPI
@@ -80,6 +150,7 @@ IoSetDevicePropertyData(
     _In_ ULONG Size,
     _In_opt_ PVOID Data)
 {
+    UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -98,6 +169,7 @@ IoGetDevicePropertyData(
     _Out_ PULONG RequiredSize,
     _Out_ PDEVPROPTYPE Type)
 {
+    UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -105,6 +177,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTKRNLVISTAAPI
 NTSTATUS
+NTAPI
 IoSetDeviceInterfacePropertyData(
     _In_ PUNICODE_STRING SymbolicLinkName,
     _In_ CONST DEVPROPKEY *PropertyKey,
@@ -114,6 +187,7 @@ IoSetDeviceInterfacePropertyData(
     _In_ ULONG Size,
     _In_reads_bytes_opt_(Size) PVOID Data)
 {
+    UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -128,6 +202,7 @@ IoGetIoPriorityHint(
 
 NTKRNLVISTAAPI
 VOID
+NTAPI
 IoSetMasterIrpStatus(
     _Inout_ PIRP MasterIrp,
     _In_ NTSTATUS Status)
@@ -147,66 +222,73 @@ IoSetMasterIrpStatus(
     }
 }
 
-NTSTATUS
-IopConnectInterruptExFullySpecific(
-    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters)
-{
-    NTSTATUS Status;
-
-    PAGED_CODE();
-
-    /* Fallback to standard IoConnectInterrupt */
-    Status = IoConnectInterrupt(Parameters->FullySpecified.InterruptObject,
-                                Parameters->FullySpecified.ServiceRoutine,
-                                Parameters->FullySpecified.ServiceContext,
-                                Parameters->FullySpecified.SpinLock,
-                                Parameters->FullySpecified.Vector,
-                                Parameters->FullySpecified.Irql,
-                                Parameters->FullySpecified.SynchronizeIrql,
-                                Parameters->FullySpecified.InterruptMode,
-                                Parameters->FullySpecified.ShareVector,
-                                Parameters->FullySpecified.ProcessorEnableMask,
-                                Parameters->FullySpecified.FloatingSave);
-    if (!NT_SUCCESS(Status))
-        DPRINT1("IopConnectInterruptExFullySpecific() failed: 0x%lx\n", Status);
-    return Status;
-}
-
 NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
-IoConnectInterruptEx(
-    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters)
+IoGetActivityIdIrp(
+    _In_ PIRP    Irp,
+    _Out_ LPCGUID Guid
+)
 {
-    PAGED_CODE();
+    UNIMPLEMENTED;
+    return STATUS_NOT_FOUND;
+}
 
-    switch (Parameters->Version)
-    {
-        case CONNECT_FULLY_SPECIFIED:
-            return IopConnectInterruptExFullySpecific(Parameters);
-        case CONNECT_FULLY_SPECIFIED_GROUP:
-            //TODO: We don't do anything for the group type
-            return IopConnectInterruptExFullySpecific(Parameters);
-        case CONNECT_MESSAGE_BASED:
-            DPRINT1("FIXME: Message based interrupts are UNIMPLEMENTED\n");
-            break;
-        case CONNECT_LINE_BASED:
-            DPRINT1("FIXME: Line based interrupts are UNIMPLEMENTED\n");
-            break;
-    }
-
-    return STATUS_SUCCESS;
+NTSTATUS
+NTAPI
+IoGetAffinityInterrupt(
+  _In_ PKINTERRUPT InterruptObject,
+  _Out_ PGROUP_AFFINITY GroupAffinity)
+{
+    UNIMPLEMENTED;
+    return STATUS_INVALID_PARAMETER;
 }
 
 NTKRNLVISTAAPI
 VOID
 NTAPI
-IoDisconnectInterruptEx(
-    _In_ PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters)
+IoReportInterruptActive(
+    _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters
+)
 {
-    PAGED_CODE();
+    UNIMPLEMENTED;
+}
 
-    //FIXME: This eventually will need to handle more cases
-    if (Parameters->ConnectionContext.InterruptObject)
-        IoDisconnectInterrupt(Parameters->ConnectionContext.InterruptObject);
+NTKRNLVISTAAPI
+VOID
+NTAPI
+IoReportInterruptInactive(
+    _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters
+)
+{
+    UNIMPLEMENTED;
+}
+
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+IoSynchronousCallDriver(_In_ PDEVICE_OBJECT DeviceObject,
+                        _In_ PIRP Irp)
+{
+    KEVENT Event;
+    PIO_STACK_LOCATION IrpStack;
+    NTSTATUS Status;
+
+    /* Initialize the event */
+    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+
+    IrpStack = Irp->Tail.Overlay.CurrentStackLocation;
+    IrpStack->Context = &Event;
+    IrpStack->CompletionRoutine = IopSynchronousCompletion;
+    IrpStack->Control = -1;
+
+    Status = IofCallDriver(DeviceObject, Irp);
+    DPRINT1("IofCallDriver status: %x\n", Status);
+    if (Status == STATUS_PENDING)
+    {
+        /* Wait for it */
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = Irp->IoStatus.Status;
+    }
+    return Status;
 }

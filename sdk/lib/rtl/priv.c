@@ -443,7 +443,11 @@ RtlAdjustPrivilege(IN ULONG Privilege,
 
     if (!NT_SUCCESS (Status))
     {
-        DPRINT1("Retrieving token handle failed (Status %lx)\n", Status);
+        DPRINT1("Retrieving token handle failed (Status 0x%08lx)\n", Status);
+        if (Status == STATUS_PRIVILEGE_NOT_HELD)
+        {
+            DPRINT1("Privilege 0x%08lx not held by token\n", Privilege);
+        }
         return Status;
     }
 

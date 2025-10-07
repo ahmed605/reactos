@@ -69,7 +69,7 @@
 @ stdcall -stub -version=0x600+ EtwEnumerateProcessRegGuids(ptr long ptr)
 @ stdcall -stub -version=0x502 EtwEnumerateTraceGuids(ptr long ptr)
 @ stdcall -stub -version=0x600+ EtwEventActivityIdControl(long ptr)
-@ stdcall -stub -version=0x600+ EtwEventEnabled(int64 ptr)
+@ stdcall -version=0x600+ EtwEventEnabled(int64 ptr)
 @ stdcall -stub -version=0x600+ EtwEventProviderEnabled(long long long)
 @ stdcall -stub -version=0x600+ EtwEventRegister(ptr ptr ptr ptr) 
 @ stdcall -stub -version=0x600+ EtwEventSetInformation(int64 long ptr long)
@@ -544,7 +544,7 @@
 @ stdcall RtlAddAuditAccessObjectAce(ptr long long long ptr ptr ptr long long)
 @ stdcall -stub RtlAddCompoundAce(ptr long long long ptr ptr)
 @ stdcall -arch=x86_64 RtlAddFunctionTable(ptr long long)
-@ stdcall -stub -version=0x600+ RtlAddMandatoryAce(ptr long long long long ptr) ; not present in Win11
+@ stdcall -version=0x600+ RtlAddMandatoryAce(ptr long long long long ptr) ; not present in Win11
 @ stdcall RtlAddRefActivationContext(ptr)
 @ stdcall RtlAddRefMemoryStream(ptr)
 @ stdcall -stub -version=0x600+ RtlAddSIDToBoundaryDescriptor(ptr ptr) ; not present in Win11
@@ -807,7 +807,7 @@
 @ stdcall RtlGetFullPathName_UstrEx(ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -arch=x86_64 RtlGetFunctionTableListHead()
 @ stdcall RtlGetGroupSecurityDescriptor(ptr ptr ptr)
-@ stdcall -stub -version=0x600+ RtlGetIntegerAtom(wstr ptr)
+@ stdcall -version=0x600+ RtlGetIntegerAtom(wstr ptr)
 @ stdcall RtlGetLastNtStatus()
 @ stdcall RtlGetLastWin32Error()
 @ stdcall RtlGetLengthWithoutLastFullDosOrNtPathElement(long ptr ptr)
@@ -998,7 +998,7 @@
 @ stdcall -stub -version=0x600+ RtlQueryCriticalSectionOwner(ptr)
 @ stdcall RtlQueryDepthSList(ptr)
 @ stdcall -version=0x600+ RtlQueryDynamicTimeZoneInformation(ptr) RtlQueryTimeZoneInformation
-@ stdcall -stub -version=0x600+ RtlQueryElevationFlags(ptr)
+@ stdcall -version=0x600+ RtlQueryElevationFlags(long)
 @ stdcall -stub -version=0x600+ RtlQueryEnvironmentVariable(ptr ptr long ptr long ptr)
 @ stdcall RtlQueryEnvironmentVariable_U(ptr ptr ptr)
 @ stdcall RtlQueryHeapInformation(long long ptr long ptr)

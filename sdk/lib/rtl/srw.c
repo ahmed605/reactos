@@ -430,3 +430,13 @@ BOOLEAN NTAPI RtlTryAcquireSRWLockShared(PRTL_SRWLOCK SRWLock)
         OldStatus = (SRW_STATE)SRWLock->Ptr;
     }
 }
+
+
+/***********************************************************************
+ *              RtlQueryPerformanceCounter (NTDLL.@)
+ */
+BOOLEAN WINAPI RtlQueryPerformanceCounter(OUT PLARGE_INTEGER PerformanceCounter)
+{
+    NtQueryPerformanceCounter(PerformanceCounter, NULL);
+    return TRUE;
+}

@@ -1280,7 +1280,10 @@ KiFlushNPXState(IN PFLOATING_SAVE_AREA SaveArea)
             {
                 Ke386FxSave(FxSaveArea);
             }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 9ebd41bd420 ([NTOSKRNL])
             /* NPX thread has lost its state */
             NpxThread->NpxState = NPX_STATE_NOT_LOADED;
         }
@@ -1447,9 +1450,9 @@ KeSaveFloatingPointState(
             /* Get the FX frame */
             FxSaveAreaFrame = KiGetThreadNpxArea(CurrentPrcb->NpxThread);
 
-            /* Save the FPU state */
             if (FxSaveAreaFrame)
             {
+                /* Save the FPU state */
                 Ke386SaveFpuState(FxSaveAreaFrame);
 
                 /* NPX thread has lost its state */

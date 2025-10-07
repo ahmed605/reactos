@@ -25,10 +25,17 @@ IntGetWinStaForCbAccess(VOID)
     NTSTATUS Status;
 
     hWinSta = UserGetProcessWindowStation();
+    if (hWinSta == NULL)
+    {
+        ERR("Process has no window station assigned\n");
+        SetLastNtError(STATUS_INVALID_HANDLE);
+        return NULL;
+    }
+
     Status = IntValidateWindowStationHandle(hWinSta, UserMode, WINSTA_ACCESSCLIPBOARD, &pWinStaObj, 0);
     if (!NT_SUCCESS(Status))
     {
-        ERR("Cannot open winsta\n");
+        ERR("Cannot open winsta %p (Status 0x%08lx)\n", hWinSta, Status);
         SetLastNtError(Status);
         return NULL;
     }

@@ -36,8 +36,9 @@ extern "C" {
 
 //
 // Global triage Info for dbgeng and 0x9F work
-//
+
 extern WDF_TRIAGE_INFO g_WdfTriageInfo;
+
 
 VOID
 STDCALL

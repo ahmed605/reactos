@@ -34,6 +34,24 @@ typedef struct _ATAPORT_PORT_DATA ATAPORT_PORT_DATA, *PATAPORT_PORT_DATA;
 typedef struct _ATA_DEVICE_REQUEST ATA_DEVICE_REQUEST, *PATA_DEVICE_REQUEST;
 typedef struct _ATAPORT_IO_CONTEXT ATAPORT_IO_CONTEXT, *PATAPORT_IO_CONTEXT;
 
+/* Bounce buffer support for 64-bit DMA */
+typedef struct _ATA_BOUNCE_BUFFER
+{
+    PVOID VirtualAddress;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    ULONG Size;
+    BOOLEAN InUse;
+    BOOLEAN IsCommonBuffer;
+} ATA_BOUNCE_BUFFER, *PATA_BOUNCE_BUFFER;
+
+VOID AtaInitializeBounceBuffers(VOID);
+PATA_BOUNCE_BUFFER AtaAllocateBounceBuffer(ULONG Size);
+VOID AtaFreeBounceBuffer(PATA_BOUNCE_BUFFER Buffer);
+
+/* Bounce buffer globals */
+extern ATA_BOUNCE_BUFFER AtaBounceBuffers[];
+extern KSPIN_LOCK AtaBounceBufferLock;
+
 /** @brief Private enum between the driver and storprop.dll */
 typedef enum _ATA_DEVICE_CLASS
 {

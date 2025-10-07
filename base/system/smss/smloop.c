@@ -51,8 +51,50 @@ SmpSessionComplete(IN PSM_API_MSG SmApiMsg,
                    IN PSMP_CLIENT_CONTEXT ClientContext,
                    IN HANDLE SmApiPort)
 {
-    DPRINT1("%s is not yet implemented\n", __FUNCTION__);
-    return STATUS_NOT_IMPLEMENTED;
+    PSM_SESSION_COMPLETE_MSG SessionCompleteMsg = &SmApiMsg->u.SessionComplete;
+    PSMP_SUBSYSTEM Subsystem;
+    PLIST_ENTRY NextEntry;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    DPRINT("SmpSessionComplete(SessionId: %lu, Status: 0x%08lx)\n",
+           SessionCompleteMsg->SessionId, SessionCompleteMsg->SessionStatus);
+
+    /* Acquire the subsystem lock */
+    RtlEnterCriticalSection(&SmpKnownSubSysLock);
+
+    /* Look for the subsystem with the matching session ID */
+    NextEntry = SmpKnownSubSysHead.Flink;
+    while (NextEntry != &SmpKnownSubSysHead)
+    {
+        Subsystem = CONTAINING_RECORD(NextEntry, SMP_SUBSYSTEM, Entry);
+
+        if (Subsystem->MuSessionId == SessionCompleteMsg->SessionId)
+        {
+            DPRINT("Found subsystem for session %lu, terminating...\n", SessionCompleteMsg->SessionId);
+
+            /* Mark as terminating */
+            Subsystem->Terminating = TRUE;
+
+            /* Dereference the subsystem */
+            SmpDereferenceSubsystem(Subsystem);
+
+            break;
+        }
+
+        NextEntry = NextEntry->Flink;
+    }
+
+    /* Release the subsystem lock */
+    RtlLeaveCriticalSection(&SmpKnownSubSysLock);
+
+    /* If we didn't find the subsystem, return an error */
+    if (NextEntry == &SmpKnownSubSysHead)
+    {
+        DPRINT1("Session %lu not found\n", SessionCompleteMsg->SessionId);
+        Status = STATUS_INVALID_PARAMETER;
+    }
+
+    return Status;
 }
 
 NTSTATUS
