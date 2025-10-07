@@ -44,22 +44,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(dwmapi);
 HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
 {
 
-#ifdef __REACTOS__
-    RTL_OSVERSIONINFOW version;
-#else
-    RTL_OSVERSIONINFOEXW version;
-#endif
-
-    TRACE("%p\n", enabled);
-
-    if (!enabled)
-        return E_INVALIDARG;
-
     *enabled = FALSE;
-    version.dwOSVersionInfoSize = sizeof(version);
-    if (!RtlGetVersion(&version))
-        *enabled = (version.dwMajorVersion > 6 || (version.dwMajorVersion == 6 && version.dwMinorVersion >= 3));
-
     return S_OK;
 }
 
@@ -70,7 +55,7 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
 {
     FIXME("(%d) stub\n", uCompositionAction);
 
-    return S_OK;
+    return E_NOTIMPL;
 }
 
 /**********************************************************************

@@ -1536,6 +1536,10 @@ typedef struct _EPROCESS
 } EPROCESS;
 
 //
+// Job Object Constants
+//
+
+//
 // Job Token Filter Data
 //
 #include <pshpack1.h>
@@ -1665,6 +1669,11 @@ typedef struct _JOBOBJECT_END_OF_JOB_TIME_INFORMATION
 {
     ULONG EndOfJobTimeAction;
 } JOBOBJECT_END_OF_JOB_TIME_INFORMATION, PJOBOBJECT_END_OF_JOB_TIME_INFORMATION;
+
+typedef struct _JOBOBJECT_JOBSET_INFORMATION
+{
+    ULONG MemberLevel;
+} JOBOBJECT_JOBSET_INFORMATION, *PJOBOBJECT_JOBSET_INFORMATION;
 
 typedef struct _JOBOBJECT_ASSOCIATE_COMPLETION_PORT
 {
