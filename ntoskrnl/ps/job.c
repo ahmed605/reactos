@@ -18,6 +18,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <internal/tag.h>
 
 /* GLOBALS *******************************************************************/
 
@@ -1520,7 +1521,7 @@ NtCreateJobSet(IN ULONG NumJob,
                IN PJOB_SET_ARRAY UserJobSet,
                IN ULONG Flags)
 {
-    UNIMPLEMENTED;
+UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -2272,7 +2273,7 @@ NtSetInformationJobObject(
     case JobObjectBasicUIRestrictions:
     {
         JOBOBJECT_BASIC_UI_RESTRICTIONS BasicUIRestrictions;
-        
+        DPRINT1("UI Restrictions");
         _SEH2_TRY
         {
             /* Copy the UI restrictions information from user buffer */
@@ -2283,6 +2284,7 @@ NtSetInformationJobObject(
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             Status = _SEH2_GetExceptionCode();
+            __debugbreak();
             break;
         }
         _SEH2_END;
@@ -2299,7 +2301,7 @@ NtSetInformationJobObject(
         KeLeaveGuardedRegionThread(CurrentThread);
         
         Status = STATUS_SUCCESS;
-        DPRINT("Set UI restrictions class to %lu\n", BasicUIRestrictions.UIRestrictionsClass);
+        DPRINT1("Set UI restrictions class to %lu\n", BasicUIRestrictions.UIRestrictionsClass);
         break;
     }
     case JobObjectBasicAccountingInformation:
@@ -2325,5 +2327,6 @@ Exit:
 
     return Status;
 }
+
 
 /* EOF */

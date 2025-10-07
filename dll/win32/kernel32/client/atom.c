@@ -433,6 +433,7 @@ ATOM
 WINAPI
 GlobalAddAtomA(LPCSTR lpString)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalAddAtom(FALSE, FALSE, lpString);
 }
 
@@ -443,6 +444,7 @@ ATOM
 WINAPI
 GlobalAddAtomW(LPCWSTR lpString)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalAddAtom(FALSE, TRUE, (LPSTR)lpString);
 }
 
@@ -453,6 +455,7 @@ ATOM
 WINAPI
 GlobalDeleteAtom(ATOM nAtom)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalDeleteAtom(FALSE, nAtom);
 }
 
@@ -463,6 +466,7 @@ ATOM
 WINAPI
 GlobalFindAtomA(LPCSTR lpString)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalFindAtom(FALSE, FALSE, lpString);
 }
 
@@ -473,6 +477,7 @@ ATOM
 WINAPI
 GlobalFindAtomW(LPCWSTR lpString)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalFindAtom(FALSE, TRUE, (LPSTR)lpString);
 }
 
@@ -485,6 +490,7 @@ GlobalGetAtomNameA(ATOM nAtom,
                    LPSTR lpBuffer,
                    int nSize)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalGetAtomName(FALSE, FALSE, nAtom, lpBuffer, (DWORD)nSize);
 }
 
@@ -497,6 +503,7 @@ GlobalGetAtomNameW(ATOM nAtom,
                    LPWSTR lpBuffer,
                    int nSize)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
     return InternalGetAtomName(FALSE,
                                TRUE,
                                nAtom,

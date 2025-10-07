@@ -2328,6 +2328,36 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         return STATUS_PROCESS_IS_TERMINATING;
     }
 
+    /* Check UI restrictions for handle inheritance */
+    if (SourceProcess->Job != NULL && TargetProcess->Job != NULL &&
+        SourceProcess->Job != TargetProcess->Job)
+    {
+        /* Source and target processes are in different jobs */
+        PEJOB TargetJob = TargetProcess->Job;
+
+        /* Check if the target job has UI restrictions that prevent handle inheritance */
+        if (TargetJob->UIRestrictionsClass & JOB_OBJECT_UILIMIT_HANDLES)
+        {
+            /* Handle inheritance is restricted */
+            ObDereferenceProcessHandleTable(SourceProcess);
+            ObDereferenceProcessHandleTable(TargetProcess);
+            ObDereferenceObject(SourceObject);
+
+            /* Check if the caller wanted us to close the source handle */
+            if (Options & DUPLICATE_CLOSE_SOURCE)
+            {
+                /* Do the attach */
+                KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
+
+                /* Close the handle and detach */
+                NtClose(SourceHandle);
+                KeUnstackDetachProcess(&ApcState);
+            }
+
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
     /* Get the source access */
     SourceAccess = HandleInformation.GrantedAccess;
 

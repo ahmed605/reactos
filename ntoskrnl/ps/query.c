@@ -87,7 +87,7 @@ NtQueryInformationProcess(
                                          PreviousMode);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("NtQueryInformationProcess(ProcessInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
+        DPRINT("NtQueryInformationProcess(ProcessInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
                 ProcessInformationClass, Status);
                 Status = 0;
     }
@@ -1272,7 +1272,7 @@ NtSetInformationProcess(IN HANDLE ProcessHandle,
                                        PreviousMode);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("NtSetInformationProcess(ProcessInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
+        DPRINT("NtSetInformationProcess(ProcessInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
                 ProcessInformationClass, Status);
                 Status = 0;
     }
@@ -2180,7 +2180,7 @@ NtSetInformationThread(IN HANDLE ThreadHandle,
                                        PreviousMode);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("NtSetInformationThread(ThreadInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
+        DPRINT("NtSetInformationThread(ThreadInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
                 ThreadInformationClass, Status);
                 Status = 0;
     }
@@ -2870,7 +2870,7 @@ NtQueryInformationThread(IN HANDLE ThreadHandle,
                                          PreviousMode);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("NtQueryInformationThread(ThreadInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
+        DPRINT("NtQueryInformationThread(ThreadInformationClass: %lu): Class validation failed! (Status: 0x%lx)\n",
                 ThreadInformationClass, Status);
                 Status = 0;
     }

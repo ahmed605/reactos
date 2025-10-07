@@ -907,8 +907,22 @@ NtUserGetClipboardData(UINT fmt, PGETCLIPBDATA pgcd)
     PCLIP pElement;
     PWINSTATION_OBJECT pWinStaObj;
     UINT uSourceFmt = fmt;
+    PEPROCESS CurrentProcess;
 
     TRACE("NtUserGetClipboardData(%x, %p)\n", fmt, pgcd);
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with clipboard read restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_READCLIPBOARD)
+    {
+        ERR("Process %p is in job %p with clipboard read restrictions\n",
+            CurrentProcess, CurrentProcess->Job);
+        SetLastNtError(STATUS_ACCESS_DENIED);
+        return NULL;
+    }
 
     UserEnterShared();
 
@@ -1092,8 +1106,22 @@ NtUserSetClipboardData(UINT fmt, HANDLE hData, PSETCLIPBDATA pUnsafeScd)
 {
     SETCLIPBDATA scd;
     HANDLE hRet;
+    PEPROCESS CurrentProcess;
 
     TRACE("NtUserSetClipboardData(%x %p %p)\n", fmt, hData, pUnsafeScd);
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with clipboard write restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_WRITECLIPBOARD)
+    {
+        ERR("Process %p is in job %p with clipboard write restrictions\n",
+            CurrentProcess, CurrentProcess->Job);
+        SetLastNtError(STATUS_ACCESS_DENIED);
+        return NULL;
+    }
 
     _SEH2_TRY
     {

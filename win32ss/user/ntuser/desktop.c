@@ -2594,8 +2594,24 @@ NtUserCreateDesktop(
     NTSTATUS Status;
     HDESK hDesk;
     HDESK Ret = NULL;
+    PEPROCESS CurrentProcess;
 
     TRACE("Enter NtUserCreateDesktop\n");
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with desktop access restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_DESKTOP)
+    {
+        ERR("Process %p is in job %p with desktop access restrictions\n",
+            CurrentProcess, CurrentProcess->Job);
+        UserLeave();
+        SetLastNtError(STATUS_ACCESS_DENIED);
+        return NULL;
+    }
+
     UserEnterExclusive();
 
     Status = IntCreateDesktop(&hDesk,
@@ -2649,6 +2665,20 @@ NtUserOpenDesktop(
     ACCESS_MASK dwDesiredAccess)
 {
     NTSTATUS Status;
+    PEPROCESS CurrentProcess;
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with desktop access restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_DESKTOP)
+    {
+        ERR("Process %p is in job %p with desktop access restrictions\n",
+            CurrentProcess, CurrentProcess->Job);
+        SetLastNtError(STATUS_ACCESS_DENIED);
+        return NULL;
+    }
     HDESK Desktop;
 
     Status = ObOpenObjectByName(
@@ -2997,6 +3027,21 @@ NtUserSwitchDesktop(HDESK hdesk)
     NTSTATUS Status;
     BOOL bRedrawDesktop;
     BOOL Ret = FALSE;
+    PEPROCESS CurrentProcess;
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with desktop access restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_DESKTOP)
+    {
+        ERR("Process %p is in job %p with desktop access restrictions\n",
+            CurrentProcess, CurrentProcess->Job);
+        UserLeave();
+        SetLastNtError(STATUS_ACCESS_DENIED);
+        return FALSE;
+    }
 
     UserEnterExclusive();
     TRACE("Enter NtUserSwitchDesktop(0x%p)\n", hdesk);

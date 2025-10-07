@@ -955,6 +955,24 @@ NtUserChangeDisplaySettings(
     UNICODE_STRING ustrDevice;
     DEVMODEW dmLocal;
     LONG lRet;
+    PEPROCESS CurrentProcess;
+
+    /* Get the current process */
+    CurrentProcess = PsGetCurrentProcess();
+
+    /* Check if the current process is in a job with display settings restrictions */
+    if (CurrentProcess->Job != NULL &&
+        CurrentProcess->Job->UIRestrictionsClass & JOB_OBJECT_UILIMIT_DISPLAYSETTINGS)
+    {
+        /* Check if this is actually a SET operation (modifying display settings) */
+        if (lpDevMode != NULL && (dwflags & (CDS_UPDATEREGISTRY | CDS_GLOBAL)))
+        {
+            ERR("Process %p is in job %p with display settings restrictions\n",
+                CurrentProcess, CurrentProcess->Job);
+            EngSetLastError(ERROR_ACCESS_DENIED);
+            return DISP_CHANGE_ACCESS_DENIED;
+        }
+    }
 
     /* Check arguments */
     if ((dwflags != CDS_VIDEOPARAMETERS) && (lParam != NULL))

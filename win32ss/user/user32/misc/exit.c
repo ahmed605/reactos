@@ -194,6 +194,8 @@ ExitWindowsEx(UINT uFlags,
      * 2- Call SrvRecordShutdownReason.
      */
 
+    /* UI restrictions are enforced by the kernel, not in user mode */
+
     return ExitWindowsWorker(uFlags, dwReserved, FALSE);
 
     /* FIXME: Call SrvRecordShutdownReason if we failed */

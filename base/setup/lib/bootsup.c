@@ -76,7 +76,7 @@ CreateFreeLoaderReactOSEntries(
     /* ReactOS */
     // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS");
     BootEntry->FriendlyName = L"\"ReactOS\"";
-    Options->OsLoadOptions  = L"/FASTDETECT";
+    Options->OsLoadOptions  = L"/SOS /FASTDETECT";
     AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS"));
 
     /* ReactOS_Debug */

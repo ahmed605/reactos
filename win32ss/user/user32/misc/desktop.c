@@ -182,6 +182,8 @@ RealSystemParametersInfoA(UINT uiAction,
 		      PVOID pvParam,
 		      UINT fWinIni)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
+
   switch (uiAction)
     {
 
@@ -343,6 +345,8 @@ RealSystemParametersInfoW(UINT uiAction,
 		      PVOID pvParam,
 		      UINT fWinIni)
 {
+    /* UI restrictions are enforced by the kernel, not in user mode */
+
   switch(uiAction)
   {
 
