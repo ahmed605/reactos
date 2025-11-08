@@ -415,7 +415,7 @@
 @ extern IoDeviceHandlerObjectType
 @ extern IoDeviceObjectType
 @ stdcall IoDisconnectInterrupt(ptr)
-@ stdcall -version=0x600+ IoDisconnectInterruptEx(ptr)
+@ stdcall IoDisconnectInterruptEx(ptr)
 @ extern IoDriverObjectType
 @ stdcall IoEnqueueIrp(ptr)
 @ stdcall IoEnumerateDeviceObjectList(ptr ptr long ptr)
