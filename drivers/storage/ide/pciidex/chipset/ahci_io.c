@@ -381,8 +381,6 @@ AtaAhciPortHandleInterrupt(
         {
             AHCI_PORT_WRITE(ChanData->IoBase, PxSataNotification, Message);
 
-            WARN("CH %lu: Notification %08lx arrived\n", ChanData->Channel, Message);
-
             ChanData->PortNotification(AtaAsyncNotificationDetected, ChanData->PortContext, 0x1);
         }
     }
