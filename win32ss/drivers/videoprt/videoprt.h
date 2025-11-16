@@ -111,6 +111,10 @@ typedef struct _VIDEO_PORT_DEVICE_EXTENSTION
    USHORT DisplayNumber;
    ULONG NumberOfSecondaryDisplays;
    BOOLEAN IsLegacyDevice;
+   BOOLEAN IsLegacyDetect;
+   BOOLEAN IsVgaDriver;
+   BOOLEAN IsVgaDetect;
+   BOOLEAN ReportDevice;
    CHAR POINTER_ALIGNMENT MiniPortDeviceExtension[1];
 } VIDEO_PORT_DEVICE_EXTENSION, *PVIDEO_PORT_DEVICE_EXTENSION;
 
@@ -258,6 +262,9 @@ extern BOOLEAN VideoPortUseNewKey;
 extern KMUTEX VideoPortInt10Mutex;
 extern KSPIN_LOCK HwResetAdaptersLock;
 extern LIST_ENTRY HwResetAdaptersList;
+extern PVIDEO_PORT_DEVICE_EXTENSION VgaDeviceExtension;
+extern PVIDEO_ACCESS_RANGE VgaRanges;
+extern ULONG NumOfVgaRanges;
 
 VOID FASTCALL
 IntAttachToCSRSS(PKPROCESS *CallingProcess, PKAPC_STATE ApcState);
