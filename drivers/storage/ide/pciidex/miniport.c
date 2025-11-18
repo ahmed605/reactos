@@ -7,8 +7,41 @@
 
 #include "pciidex.h"
 
+#define NDEBUG
+#include <debug.h>
+
 /** @brief Global debugging level. Valid values are between 0 (Error) and 3 (Trace). */
 ULONG PciIdeDebug = 0;
+
+CODE_SEG("PAGE")
+NTSTATUS
+PciIdeXStartMiniport(
+    _In_ PFDO_DEVICE_EXTENSION FdoExtension)
+{
+    PPCIIDEX_DRIVER_EXTENSION DriverExtension;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (FdoExtension->MiniportStarted)
+        return STATUS_SUCCESS;
+
+    DPRINT("Starting miniport\n");
+
+    DriverExtension = IoGetDriverObjectExtension(FdoExtension->DriverObject,
+                                                 FdoExtension->DriverObject);
+    ASSERT(DriverExtension);
+
+    FdoExtension->Properties.Size = sizeof(IDE_CONTROLLER_PROPERTIES);
+    FdoExtension->Properties.ExtensionSize = DriverExtension->MiniControllerExtensionSize;
+    Status = DriverExtension->HwGetControllerProperties(FdoExtension->MiniControllerExtension,
+                                                        &FdoExtension->Properties);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    FdoExtension->MiniportStarted = TRUE;
+    return STATUS_SUCCESS;
+}
 
 CODE_SEG("PAGE")
 IDE_CHANNEL_STATE
@@ -62,21 +95,21 @@ PciIdeXGetBusData(
     _In_ ULONG ConfigDataOffset,
     _In_ ULONG BufferLength)
 {
-    PFDO_DEVICE_EXTENSION FdoExt;
-    PATA_CONTROLLER Controller;
+    PFDO_DEVICE_EXTENSION FdoExtension;
     ULONG BytesRead;
 
-    INFO("PciIdeXGetBusData(%p %p 0x%lx 0x%lx)\n",
-         DeviceExtension, Buffer, ConfigDataOffset, BufferLength);
+    DPRINT("PciIdeXGetBusData(%p %p 0x%lx 0x%lx)\n",
+           DeviceExtension, Buffer, ConfigDataOffset, BufferLength);
 
-    FdoExt = CONTAINING_RECORD(DeviceExtension, FDO_DEVICE_EXTENSION, MiniControllerExtension);
-    Controller = &FdoExt->Controller;
+    FdoExtension = CONTAINING_RECORD(DeviceExtension,
+                                     FDO_DEVICE_EXTENSION,
+                                     MiniControllerExtension);
 
-    BytesRead = (*Controller->BusInterface.GetBusData)(Controller->BusInterface.Context,
-                                                       PCI_WHICHSPACE_CONFIG,
-                                                       Buffer,
-                                                       ConfigDataOffset,
-                                                       BufferLength);
+    BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
+                                                         PCI_WHICHSPACE_CONFIG,
+                                                         Buffer,
+                                                         ConfigDataOffset,
+                                                         BufferLength);
     if (BytesRead != BufferLength)
         return STATUS_UNSUCCESSFUL;
 
@@ -93,38 +126,24 @@ PciIdeXSetBusData(
     _In_ ULONG ConfigDataOffset,
     _In_ ULONG BufferLength)
 {
-    PFDO_DEVICE_EXTENSION FdoExt;
-    PATA_CONTROLLER Controller;
-    UCHAR LocalBuffer[4];
+    PFDO_DEVICE_EXTENSION FdoExtension;
     ULONG i, BytesWritten;
     PUCHAR CurrentBuffer;
     KIRQL OldIrql;
     NTSTATUS Status;
 
-    INFO("PciIdeXSetBusData(%p %p %p 0x%lx 0x%lx)\n",
-         DeviceExtension, Buffer, DataMask, ConfigDataOffset, BufferLength);
+    DPRINT("PciIdeXSetBusData(%p %p %p 0x%lx 0x%lx)\n",
+           DeviceExtension, Buffer, DataMask, ConfigDataOffset, BufferLength);
 
-    /* Optimize the common case (4-byte PCI access) */
-    if (BufferLength <= sizeof(LocalBuffer))
-    {
-        CurrentBuffer = LocalBuffer;
-    }
-    else
-    {
-        CurrentBuffer = ExAllocatePoolUninitialized(NonPagedPool, BufferLength, TAG_PCIIDEX);
-        if (!CurrentBuffer)
-            return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    CurrentBuffer = ExAllocatePoolWithTag(NonPagedPool, BufferLength, TAG_PCIIDEX);
+    if (!CurrentBuffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
-    FdoExt = CONTAINING_RECORD(DeviceExtension, FDO_DEVICE_EXTENSION, MiniControllerExtension);
-    Controller = &FdoExt->Controller;
+    FdoExtension = CONTAINING_RECORD(DeviceExtension,
+                                     FDO_DEVICE_EXTENSION,
+                                     MiniControllerExtension);
 
-    /*
-     * This spinlock protects the PCI configuration space against concurrent modifications.
-     * For example, the PIIX register SIDETIM (0x44) is a byte-sized register
-     * and controls both of the IDE channels.
-     */
-    KeAcquireSpinLock(&Controller->Lock, &OldIrql);
+    KeAcquireSpinLock(&FdoExtension->BusDataLock, &OldIrql);
 
     Status = PciIdeXGetBusData(DeviceExtension, Buffer, ConfigDataOffset, BufferLength);
     if (!NT_SUCCESS(Status))
@@ -136,42 +155,19 @@ PciIdeXSetBusData(
                            (((PUCHAR)DataMask)[i] & ((PUCHAR)Buffer)[i]);
     }
 
-    BytesWritten = (*Controller->BusInterface.SetBusData)(Controller->BusInterface.Context,
-                                                          PCI_WHICHSPACE_CONFIG,
-                                                          CurrentBuffer,
-                                                          ConfigDataOffset,
-                                                          BufferLength);
+    BytesWritten = (*FdoExtension->BusInterface.SetBusData)(FdoExtension->BusInterface.Context,
+                                                         PCI_WHICHSPACE_CONFIG,
+                                                         CurrentBuffer,
+                                                         ConfigDataOffset,
+                                                         BufferLength);
     if (BytesWritten != BufferLength)
         Status = STATUS_UNSUCCESSFUL;
     else
         Status = STATUS_SUCCESS;
 
 Cleanup:
-    KeReleaseSpinLock(&Controller->Lock, OldIrql);
+    KeReleaseSpinLock(&FdoExtension->BusDataLock, OldIrql);
 
-    if (CurrentBuffer != LocalBuffer)
-        ExFreePoolWithTag(CurrentBuffer, TAG_PCIIDEX);
-    return Status;
-}
-
-NTSTATUS
-NTAPI
-PciIdexGetBusLocation(
-    _In_ PVOID DeviceExtension,
-    _Out_ PULONG BusLocation)
-{
-    PFDO_DEVICE_EXTENSION FdoExtension;
-    ULONG Length;
-    NTSTATUS Status;
-
-    FdoExtension = CONTAINING_RECORD(DeviceExtension,
-                                     FDO_DEVICE_EXTENSION,
-                                     MiniControllerExtension);
-
-    Status = IoGetDeviceProperty(FdoExtension->Pdo,
-                                 DevicePropertyAddress,
-                                 sizeof(*BusLocation),
-                                 BusLocation,
-                                 &Length);
+    ExFreePoolWithTag(CurrentBuffer, TAG_PCIIDEX);
     return Status;
 }

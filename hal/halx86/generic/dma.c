@@ -77,7 +77,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#define MAX_SG_ELEMENTS 0x20
+#define MAX_SG_ELEMENTS 0x10
 
 #ifndef _MINIHAL_
 static KEVENT HalpDmaLock;
@@ -993,15 +993,12 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 	PSCATTER_GATHER_CONTEXT AdapterControlContext = Context;
 	PADAPTER_OBJECT AdapterObject = AdapterControlContext->AdapterObject;
 	PSCATTER_GATHER_LIST ScatterGatherList;
-	PSCATTER_GATHER_ELEMENT TempElements;
+	SCATTER_GATHER_ELEMENT TempElements[MAX_SG_ELEMENTS];
 	ULONG ElementCount = 0, RemainingLength = AdapterControlContext->Length;
 	PUCHAR CurrentVa = AdapterControlContext->CurrentVa;
 
 	/* Store the map register base for later in HalPutScatterGatherList */
 	AdapterControlContext->MapRegisterBase = MapRegisterBase;
-
-    TempElements = ExAllocatePoolZero(NonPagedPool, sizeof(*TempElements) * MAX_SG_ELEMENTS, TAG_DMA);
-	ASSERT(TempElements);
 
 	while (RemainingLength > 0 && ElementCount < MAX_SG_ELEMENTS)
 	{
@@ -1041,8 +1038,6 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 	RtlCopyMemory(ScatterGatherList->Elements,
 	              TempElements,
 				  sizeof(SCATTER_GATHER_ELEMENT) * ElementCount);
-
-    ExFreePoolWithTag(TempElements, TAG_DMA);
 
 	DPRINT("Initiating S/G DMA with %d element(s)\n", ElementCount);
 
