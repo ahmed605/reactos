@@ -87,12 +87,25 @@ NtGdiExtEscape(
    INT    OutSize,
    OPTIONAL LPSTR  UnsafeOutData)
 {
+   /* Because Intel likes being special. */
+   UCHAR    StackInData[32];
+   UCHAR    StackOutData[32];
    LPVOID   SafeInData = NULL;
    LPVOID   SafeOutData = NULL;
    NTSTATUS Status = STATUS_SUCCESS;
-   INT      Result;
-   PPDEVOBJ ppdev;
-   PSURFACE psurf;
+   INT      Result = -1;
+   PPDEVOBJ ppdev = NULL;
+   PSURFACE psurf = NULL;
+   BOOL     bAllocIn = FALSE;
+   BOOL     bAllocOut = FALSE;
+   BOOL     bStatus = TRUE;
+
+   /* Validate input parameters */
+   if ((InSize < 0) || (OutSize < 0) || (nDriver < 0))
+   {
+      EngSetLastError(ERROR_INVALID_PARAMETER);
+      return -1;
+   }
 
    if (hDC == NULL)
    {
@@ -153,133 +166,139 @@ NtGdiExtEscape(
    if (ppdev->DriverFunctions.Escape == NULL)
    {
       Result = 0;
-      goto Exit;
+      goto Cleanup;
    }
 
-   if ( InSize && UnsafeInData )
+   if (InSize != 0 && bStatus)
    {
       _SEH2_TRY
       {
-        ProbeForRead(UnsafeInData,
-                     InSize,
-                     1);
+         if (InSize <= sizeof(StackInData))
+         {
+            ProbeForRead(UnsafeInData, InSize, 1);
+            RtlCopyMemory(StackInData, UnsafeInData, InSize);
+            SafeInData = StackInData;
+         }
+         else
+         {
+            SafeInData = ExAllocatePoolWithTag(PagedPool, InSize, GDITAG_TEMP);
+            if (SafeInData == NULL)
+            {
+               EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+               bStatus = FALSE;
+            }
+            else
+            {
+               bAllocIn = TRUE;
+               ProbeForRead(UnsafeInData, InSize, 1);
+               RtlCopyMemory(SafeInData, UnsafeInData, InSize);
+            }
+         }
       }
       _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
       {
-        Status = _SEH2_GetExceptionCode();
-      }
-      _SEH2_END;
-
-      if (!NT_SUCCESS(Status))
-      {
-         Result = -1;
-         goto Exit;
-      }
-
-      SafeInData = ExAllocatePoolWithTag ( PagedPool, InSize, GDITAG_TEMP );
-      if ( !SafeInData )
-      {
-         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
-         Result = -1;
-         goto Exit;
-      }
-
-      _SEH2_TRY
-      {
-        /* Pointers were already probed! */
-        RtlCopyMemory(SafeInData,
-                      UnsafeInData,
-                      InSize);
-      }
-      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-      {
-        Status = _SEH2_GetExceptionCode();
-      }
-      _SEH2_END;
-
-      if ( !NT_SUCCESS(Status) )
-      {
+         Status = _SEH2_GetExceptionCode();
          SetLastNtError(Status);
-         Result = -1;
-         goto Exit;
-      }
-   }
-
-   if ( OutSize && UnsafeOutData )
-   {
-      _SEH2_TRY
-      {
-        ProbeForWrite(UnsafeOutData,
-                      OutSize,
-                      1);
-      }
-      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-      {
-        Status = _SEH2_GetExceptionCode();
+         bStatus = FALSE;
       }
       _SEH2_END;
 
-      if (!NT_SUCCESS(Status))
+      if (!bStatus)
       {
-         SetLastNtError(Status);
-         Result = -1;
-         goto Exit;
-      }
-
-      SafeOutData = ExAllocatePoolWithTag ( PagedPool, OutSize, GDITAG_TEMP );
-      if ( !SafeOutData )
-      {
-         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
-         Result = -1;
          goto Exit;
       }
    }
 
-   /* Finally call the driver */
-   Result = ppdev->DriverFunctions.Escape(
-         &psurf->SurfObj,
-         Escape,
-         InSize,
-         SafeInData,
-         OutSize,
-         SafeOutData );
-
-Exit:
-   if (hDC == NULL)
+   if (OutSize != 0 && bStatus)
    {
-      EngReleaseSemaphore(ppdev->hsemDevLock);
-   }
-   SURFACE_ShareUnlockSurface(psurf);
-   PDEVOBJ_vRelease(ppdev);
-
-   if ( SafeInData )
-   {
-      ExFreePoolWithTag ( SafeInData ,GDITAG_TEMP );
-   }
-
-   if ( SafeOutData )
-   {
-      if (Result > 0)
+      if (UnsafeOutData != NULL)
       {
          _SEH2_TRY
          {
-            /* Pointers were already probed! */
-            RtlCopyMemory(UnsafeOutData, SafeOutData, OutSize);
+            ProbeForWrite(UnsafeOutData, OutSize, 1);
          }
          _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
          {
             Status = _SEH2_GetExceptionCode();
+            SetLastNtError(Status);
+            bStatus = FALSE;
          }
          _SEH2_END;
 
-         if ( !NT_SUCCESS(Status) )
+         if (!bStatus)
          {
-            SetLastNtError(Status);
-            Result = -1;
+            goto Cleanup;
          }
       }
 
-      ExFreePoolWithTag ( SafeOutData, GDITAG_TEMP );
+      if (OutSize <= sizeof(StackOutData))
+      {
+         SafeOutData = StackOutData;
+      }
+      else
+      {
+         SafeOutData = ExAllocatePoolWithTag(PagedPool, OutSize, GDITAG_TEMP);
+         if (SafeOutData == NULL)
+         {
+            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            bStatus = FALSE;
+            goto Cleanup;
+         }
+         bAllocOut = TRUE;
+      }
+
+      RtlZeroMemory(SafeOutData, OutSize);
+   }
+
+   if (bStatus)
+   {
+      Result = ppdev->DriverFunctions.Escape(
+            &psurf->SurfObj,
+            Escape,
+            InSize,
+            SafeInData,
+            OutSize,
+            SafeOutData);
+   }
+
+   if (bStatus && OutSize != 0 && UnsafeOutData != NULL && SafeOutData != NULL)
+   {
+      _SEH2_TRY
+      {
+         RtlCopyMemory(UnsafeOutData, SafeOutData, OutSize);
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         Status = _SEH2_GetExceptionCode();
+         SetLastNtError(Status);
+         Result = -1;
+      }
+      _SEH2_END;
+   }
+
+Cleanup:
+   if (ppdev != NULL)
+   {
+      if (hDC == NULL)
+      {
+         EngReleaseSemaphore(ppdev->hsemDevLock);
+      }
+      PDEVOBJ_vRelease(ppdev);
+   }
+
+   if (psurf != NULL)
+   {
+      SURFACE_ShareUnlockSurface(psurf);
+   }
+
+   if (bAllocIn && SafeInData != NULL)
+   {
+      ExFreePoolWithTag(SafeInData, GDITAG_TEMP);
+   }
+
+   if (bAllocOut && SafeOutData != NULL)
+   {
+      ExFreePoolWithTag(SafeOutData, GDITAG_TEMP);
    }
 
    return Result;
