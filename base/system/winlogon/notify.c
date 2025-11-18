@@ -90,7 +90,6 @@ GetNotificationHandler(
  * @brief
  * Loads the notification DLL and retrieves its exported notification handlers.
  **/
-static
 BOOL
 LoadNotifyDll(
     _Inout_ PNOTIFICATION_ITEM NotificationDll)
@@ -230,7 +229,6 @@ done:
         DeleteNotification(NotificationDll);
 }
 
-static
 VOID
 AddNotificationDll(
     _In_ HKEY hNotifyKey,
@@ -468,7 +466,6 @@ InitNotifications(VOID)
 }
 
 
-static
 VOID
 CallNotificationDll(
     _In_ PNOTIFICATION_ITEM NotificationDll,
