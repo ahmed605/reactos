@@ -46,21 +46,6 @@
 WINE_DEFAULT_DEBUG_CHANNEL(rpc);
 
 
-static inline void *image_base(void)
-{
-#if defined(__MINGW32__) || defined(_MSC_VER)
-    extern IMAGE_DOS_HEADER __ImageBase;
-    return (void *)&__ImageBase;
-#else
-    extern IMAGE_NT_HEADERS __wine_spec_nt_header;
-    return (void *)((__wine_spec_nt_header.OptionalHeader.ImageBase + 0xffff) & ~0xffff);
-#endif
-}
-
-HRESULT WINAPI DllRegisterServer(void)
-{
-    return __wine_register_resources( image_base() );
-}
 
 #define NDR_TABLE_MASK 127
 
