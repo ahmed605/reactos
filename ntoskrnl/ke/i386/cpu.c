@@ -1526,8 +1526,15 @@ KeRestoreFloatingPointState(
      */
     if (FsContext->CurrentThread != KeGetCurrentThread())
     {
-        //HACK: return invalid param instead of bugcheck for AMD GPUs
-        return STATUS_INVALID_PARAMETER;
+        /*
+         * This isn't the thread that saved the
+         * FPU state context, crash the system!
+         */
+        KeBugCheckEx(INVALID_FLOATING_POINT_STATE,
+                     0x2,
+                     (ULONG_PTR)FsContext->CurrentThread,
+                     (ULONG_PTR)KeGetCurrentThread(),
+                     0);
     }
 
     /* Are we under the same NPX interrupt level? */

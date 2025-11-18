@@ -350,8 +350,7 @@ MiUnmapLockedPagesInUserSpace(
 
         if (MiDecrementPageTableReferences(BaseAddress) == 0)
         {
-            // HACK: Disabled for AMD GPU OpenGL application exit!
-           // ASSERT(MiIsPteOnPdeBoundary(PointerPte + 1) || (NumberOfPages == 1));
+            ASSERT(MiIsPteOnPdeBoundary(PointerPte + 1) || (NumberOfPages == 1));
             MiDeletePde(PointerPde, Process);
         }
 
