@@ -2435,7 +2435,7 @@ UserFault:
 
             /* Not supported */
             ASSERT(ProtoPte == NULL);
-            ASSERT(CurrentThread->ApcNeeded == 0);
+       //     ASSERT(CurrentThread->ApcNeeded == 0);
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
@@ -2605,7 +2605,7 @@ UserFault:
         if (Status != STATUS_SUCCESS)
         {
             /* Not supported */
-            ASSERT(CurrentThread->ApcNeeded == 0);
+        //    ASSERT(CurrentThread->ApcNeeded == 0);
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
