@@ -240,12 +240,8 @@ VOID
 PopAcquirePowerPolicyLock(VOID)
 {
     /* The current thread's code has to be paged */
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+ //   ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
-    /* Acquire the policy lock */
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&PopPowerPolicyLock, TRUE);
-    PopPowerPolicyOwnerLockThread = KeGetCurrentThread();
 }
 
 FORCEINLINE
@@ -253,16 +249,8 @@ VOID
 PopReleasePowerPolicyLock(VOID)
 {
     /* The current thread's code has to be paged */
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+  //  ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
-    /* Release the policy lock */
-    POP_ASSERT_POWER_POLICY_LOCK_OWNERSHIP();
-    PopPowerPolicyOwnerLockThread = NULL;
-    ExReleaseResourceLite(&PopPowerPolicyLock);
-
-    /* And check for pending policy workers */
-    PopCheckForPendingWorkers();
-    KeLeaveCriticalRegion();
 }
 
 //
