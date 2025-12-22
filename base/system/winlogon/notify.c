@@ -56,7 +56,7 @@ static LIST_ENTRY NotificationDllListHead;
  * Retrieves the address of the exported notification handler,
  * specified in the registry entry for the notification DLL.
  **/
-static
+
 PWLX_NOTIFY_HANDLER
 GetNotificationHandler(
     _In_ HKEY hDllKey,
@@ -90,7 +90,7 @@ GetNotificationHandler(
  * @brief
  * Loads the notification DLL and retrieves its exported notification handlers.
  **/
-static
+
 BOOL
 LoadNotifyDll(
     _Inout_ PNOTIFICATION_ITEM NotificationDll)
@@ -150,7 +150,7 @@ LoadNotifyDll(
  * @brief
  * Frees the resources associated to a notification.
  **/
-static
+
 VOID
 DeleteNotification(
     _In_ PNOTIFICATION_ITEM Notification)
@@ -171,7 +171,7 @@ DeleteNotification(
  * @brief
  * Initializes the internal SFC notifications.
  **/
-static
+
 VOID
 AddSfcNotification(VOID)
 {
@@ -230,7 +230,7 @@ done:
         DeleteNotification(NotificationDll);
 }
 
-static
+
 VOID
 AddNotificationDll(
     _In_ HKEY hNotifyKey,
@@ -467,66 +467,13 @@ InitNotifications(VOID)
     return TRUE;
 }
 
-
-static
 VOID
 CallNotificationDll(
     _In_ PNOTIFICATION_ITEM NotificationDll,
     _In_ NOTIFICATION_TYPE Type,
     _In_ PWLX_NOTIFICATION_INFO pInfo)
 {
-<<<<<<< HEAD
-    PWLX_NOTIFY_HANDLER pNotifyHandler;
-    WLX_NOTIFICATION_INFO Info;
-    HANDLE UserToken;
-
-    /* Delay-load the DLL if needed */
-    if (!NotificationDll->hModule)
-    {
-        if (!LoadNotifyDll(NotificationDll))
-        {
-            /* We failed, disable it */
-            NotificationDll->bEnabled = FALSE;
-            return;
-        }
-        ASSERT(NotificationDll->hModule);
-    }
-
-    /* Retrieve the notification handler; bail out if none is specified */
-    pNotifyHandler = NotificationDll->Handler[Type];
-    if (!pNotifyHandler)
-        return;
-
-    /* Capture the notification info structure, since
-     * the notification handler might mess with it */
-    Info = *pInfo;
-
-    /* Impersonate the logged-on user if necessary */
-    UserToken = (NotificationDll->bImpersonate ? Info.hToken : NULL);
-    if (UserToken && !ImpersonateLoggedOnUser(UserToken))
-    {
-        ERR("WL: ImpersonateLoggedOnUser() failed with error %lu\n", GetLastError());
-        return;
-    }
-
-    /* Call the notification handler in SEH to prevent any Winlogon crashes */
-    _SEH2_TRY
-    {
-        pNotifyHandler(&Info);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        ERR("WL: Exception 0x%08lx hit by notification DLL %ws while executing %s notify function\n",
-            _SEH2_GetExceptionCode(), NotificationDll->pszDllName, FuncNames[Type]);
-    }
-    _SEH2_END;
-
-    /* Revert impersonation */
-    if (UserToken)
-        RevertToSelf();
-=======
     UNREFERENCED_PARAMETER(FuncNames);
->>>>>>> 399b5d0da8e ([HACKS] The hack list is as follows:)
 }
 
 
