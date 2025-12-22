@@ -190,11 +190,6 @@ NtGdiExtEscape(
          bStatus = FALSE;
       }
       _SEH2_END;
-
-      if (!bStatus)
-      {
-         goto Exit;
-      }
    }
 
    if (OutSize != 0 && bStatus)
