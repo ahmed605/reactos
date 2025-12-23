@@ -96,7 +96,7 @@ NtGdiExtEscape(
    BOOL     bAllocIn = FALSE;
    BOOL     bAllocOut = FALSE;
    BOOL     bStatus = TRUE;
-
+   KFLOATING_SAVE TempBuffer;
    /* Validate input parameters */
    if ((InSize < 0) || (OutSize < 0) || (nDriver < 0))
    {
@@ -227,6 +227,7 @@ NtGdiExtEscape(
 
    if (bStatus)
    {
+      Result = KeSaveFloatingPointState(&TempBuffer);
       Result = ppdev->DriverFunctions.Escape(
             &psurf->SurfObj,
             Escape,
@@ -234,6 +235,7 @@ NtGdiExtEscape(
             SafeInData,
             OutSize,
             SafeOutData);
+      KeRestoreFloatingPointState(&TempBuffer);
    }
 
    if (bStatus && OutSize != 0 && UnsafeOutData != NULL && SafeOutData != NULL)

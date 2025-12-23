@@ -1374,11 +1374,16 @@ KeSaveFloatingPointState(
     PFLOATING_SAVE_CONTEXT FsContext;
     PFX_SAVE_AREA FxSaveAreaFrame;
     PKPRCB CurrentPrcb;
+    PKTHREAD OldNpxThread;
+    BOOLEAN WereInterruptsEnabled;
+    NTSTATUS Status;
 
     /* Sanity checks */
     ASSERT(Save);
     ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
     ASSERT(KeI386NpxPresent);
+
+    Status = STATUS_SUCCESS;
 
     /* Initialize the floating point context */
     FsContext = ExAllocatePoolWithTag(NonPagedPool,
@@ -1420,8 +1425,8 @@ KeSaveFloatingPointState(
      */
     FsContext->PfxSaveArea = ALIGN_UP_POINTER_BY(FsContext->Buffer, 16);
 
-    /* Disable interrupts and get the current processor control region */
-    _disable();
+    /* Disable interrupts (but preserve prior state) and get the current PRCB */
+    WereInterruptsEnabled = KeDisableInterrupts();
     CurrentPrcb = KeGetCurrentPrcb();
 
     /* Store the current thread to context */
@@ -1433,28 +1438,45 @@ KeSaveFloatingPointState(
      * we are informing the scheduler the current FPU state
      * belongs to this thread.
      */
-    if (FsContext->CurrentThread != CurrentPrcb->NpxThread)
+    OldNpxThread = CurrentPrcb->NpxThread;
+    if (FsContext->CurrentThread != OldNpxThread)
     {
-        if ((CurrentPrcb->NpxThread != NULL) &&
-            (CurrentPrcb->NpxThread->NpxState == NPX_STATE_LOADED))
+        if ((OldNpxThread != NULL) &&
+            (OldNpxThread->NpxState == NPX_STATE_LOADED))
         {
             /* Get the FX frame */
-            FxSaveAreaFrame = KiGetThreadNpxArea(CurrentPrcb->NpxThread);
+            FxSaveAreaFrame = KiGetThreadNpxArea(OldNpxThread);
 
             /* Save the FPU state */
-            Ke386SaveFpuState(FxSaveAreaFrame);
+            __try
+            {
+                Ke386SaveFpuState(FxSaveAreaFrame);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = (NTSTATUS)GetExceptionCode();
+                goto Fail;
+            }
 
             /* NPX thread has lost its state */
-            CurrentPrcb->NpxThread->NpxState = NPX_STATE_NOT_LOADED;
+            OldNpxThread->NpxState = NPX_STATE_NOT_LOADED;
             FxSaveAreaFrame->NpxSavedCpu = 0;
         }
-
-        /* The new NPX thread is the current thread */
-        CurrentPrcb->NpxThread = FsContext->CurrentThread;
     }
 
     /* Perform the save */
-    Ke386SaveFpuState(FsContext->PfxSaveArea);
+    __try
+    {
+        Ke386SaveFpuState(FsContext->PfxSaveArea);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = (NTSTATUS)GetExceptionCode();
+        goto Fail;
+    }
+
+    /* The new NPX thread is the current thread */
+    CurrentPrcb->NpxThread = FsContext->CurrentThread;
 
     /* Store the NPX IRQL */
     FsContext->OldNpxIrql = FsContext->CurrentThread->Header.NpxIrql;
@@ -1465,12 +1487,30 @@ KeSaveFloatingPointState(
     /* Initialize the FPU */
     Ke386FnInit();
 
-    /* Enable interrupts back */
-    _enable();
+    /* Restore interrupts back to prior state */
+    KeRestoreInterrupts(WereInterruptsEnabled);
 
     /* Give the saved FPU context to the caller */
     *((PVOID *) Save) = FsContext;
     return STATUS_SUCCESS;
+
+Fail:
+    /* Restore interrupts back to prior state */
+    KeRestoreInterrupts(WereInterruptsEnabled);
+
+    /* Revert NPX thread on failure */
+    CurrentPrcb->NpxThread = OldNpxThread;
+
+    /* Free allocated context/buffer */
+    if (FsContext->Buffer)
+        ExFreePoolWithTag(FsContext->Buffer, TAG_FLOATING_POINT_FX);
+    ExFreePoolWithTag(FsContext, TAG_FLOATING_POINT_CONTEXT);
+
+    /* Prefer a benign status for known-bad GPU paths */
+    if (Status == STATUS_ACCESS_VIOLATION || Status == STATUS_DATATYPE_MISALIGNMENT)
+        return STATUS_INVALID_PARAMETER;
+
+    return Status;
 }
 
 /**

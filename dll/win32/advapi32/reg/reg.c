@@ -2574,7 +2574,7 @@ RegEnumKeyExW(
         BufferSize = sizeof(KEY_BASIC_INFORMATION) + NameLength;
     }
 
-    KeyInfo = RtlAllocateHeap(ProcessHeap,
+    KeyInfo = RtlAllocateHeap(RtlGetProcessHeap(),
                               0,
                               BufferSize);
     if (KeyInfo == NULL)
@@ -2648,7 +2648,7 @@ RegEnumKeyExW(
         }
     }
 
-    RtlFreeHeap(ProcessHeap,
+    RtlFreeHeap(RtlGetProcessHeap(),
                 0,
                 KeyInfo);
 

@@ -282,8 +282,8 @@ PnpEventThread(
         DPRINT("Received PnP Event\n");
         switch (PnpEvent->EventCategory)
         {
-//            case HardwareProfileChangeEvent:
-
+            case HardwareProfileChangeEvent:
+                break;
             case TargetDeviceChangeEvent:
                 ProcessTargetDeviceEvent(PnpEvent);
                 break;

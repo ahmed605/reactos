@@ -759,11 +759,29 @@ KiTrap07Handler(IN PKTRAP_FRAME TrapFrame)
                 /* Get the NPX frame */
                 NpxSaveArea = KiGetThreadNpxArea(NpxThread);
 
-                /* Save FPU state */
-                Ke386SaveFpuState(NpxSaveArea);
+                /*
+                 * Some third-party display drivers have been observed to corrupt thread
+                 * bookkeeping, which can make KiGetThreadNpxArea return an invalid pointer.
+                 * Never bugcheck the whole system because of a bad NPX save target.
+                 */
+                if (((ULONG_PTR)NpxSaveArea < (ULONG_PTR)MmSystemRangeStart) ||
+                    ((ULONG_PTR)NpxThread->InitialStack < (ULONG_PTR)MmSystemRangeStart) ||
+                    ((ULONG_PTR)NpxThread->StackLimit < (ULONG_PTR)MmSystemRangeStart) ||
+                    ((ULONG_PTR)NpxSaveArea < (ULONG_PTR)NpxThread->StackLimit) ||
+                    (((ULONG_PTR)NpxSaveArea + sizeof(FX_SAVE_AREA)) > (ULONG_PTR)NpxThread->InitialStack) ||
+                    (KeI386FxsrPresent && (((ULONG_PTR)NpxSaveArea & 0xF) != 0)))
+                {
+                    KeGetCurrentPrcb()->NpxThread = NULL;
+                    NpxThread->NpxState = NPX_STATE_NOT_LOADED;
+                }
+                else
+                {
+                    /* Save FPU state */
+                    Ke386SaveFpuState(NpxSaveArea);
 
-                /* Update NPX state */
-                NpxThread->NpxState = NPX_STATE_NOT_LOADED;
+                    /* Update NPX state */
+                    NpxThread->NpxState = NPX_STATE_NOT_LOADED;
+                }
            }
 
             /* Load FPU state */

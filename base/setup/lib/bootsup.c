@@ -83,7 +83,8 @@ CreateFreeLoaderReactOSEntries(
     // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_Debug");
     BootEntry->FriendlyName = L"\"ReactOS (Debug)\"";
     Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS";
-    
+    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_Debug"));
+
     /* ReactOS_NetDebug */
     // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_NetDebug");
     BootEntry->FriendlyName = L"\"ReactOS (Net Debug)\"";

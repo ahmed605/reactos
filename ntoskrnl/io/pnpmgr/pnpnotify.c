@@ -519,3 +519,16 @@ IoUnregisterPlugPlayNotification(
 
     return STATUS_SUCCESS;
 }
+
+/*
+ * @implemented
+ */
+CODE_SEG("PAGE")
+NTSTATUS
+NTAPI
+IoUnregisterPlugPlayNotificationEx(
+    _In_ PVOID NotificationEntry)
+{
+    PAGED_CODE();
+    return IoUnregisterPlugPlayNotification(NotificationEntry);
+}
