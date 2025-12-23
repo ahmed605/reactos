@@ -18,37 +18,3 @@
 
 #define NDEBUG
 #include <debug.h>
-
-NTSTATUS
-NTAPI
-EtwRegister(
-    IN LPCGUID ProviderId,
-    IN OPTIONAL PETWENABLECALLBACK EnableCallback,
-    IN OPTIONAL PVOID CallbackContext,
-    OUT PREGHANDLE RegHandle)
-{
-    UNIMPLEMENTED;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-EtwUnregister(
-    IN REGHANDLE RegHandle)
-{
-    UNIMPLEMENTED;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-EtwWrite(
-    IN REGHANDLE RegHandle,
-    IN PCEVENT_DESCRIPTOR EventDescriptor,
-    IN OPTIONAL LPCGUID ActivityId,
-    IN ULONG UserDataCount,
-    IN PEVENT_DATA_DESCRIPTOR UserData)
-{
-    UNIMPLEMENTED;
-    return STATUS_SUCCESS;
-}

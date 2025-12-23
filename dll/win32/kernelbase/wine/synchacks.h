@@ -25,6 +25,84 @@ NTSYSAPI NTSTATUS  WINAPI RtlQueryActivationContextApplicationSettings(DWORD,HAN
 NTSYSAPI NTSTATUS  WINAPI LdrSetDefaultDllDirectories(ULONG);
 NTSYSAPI NTSTATUS  WINAPI LdrRemoveDllDirectory(void*);
 
+
+/* End: _WIN32_WINNT >= 0x0400 */
+
+/*
+ *	NT I/O-Manager
+ */
+
+/*
+ * structures for NtQueryVolumeInformationFile
+ * (wdm.h)
+ */
+
+/* FileFsVolumeInformation = 1 */
+typedef struct _FILE_FS_VOLUME_INFORMATION {
+	LARGE_INTEGER	VolumeCreationTime;
+	ULONG		VolumeSerialNumber;
+	ULONG		VolumeLabelLength;
+	BOOLEAN		SupportsObjects;
+	WCHAR		VolumeLabel[1];
+} FILE_FS_VOLUME_INFORMATION, *PFILE_FS_VOLUME_INFORMATION;
+
+/* FileFsLabelInformation = 2 */
+/*
+ unknown
+*/
+
+#define DEVICE_TYPE DWORD
+/* FileFsSizeInformation = 3 */
+typedef struct _FILE_FS_SIZE_INFORMATION {
+	LARGE_INTEGER	TotalAllocationUnits;
+	LARGE_INTEGER	AvailableAllocationUnits;
+	ULONG		SectorsPerAllocationUnit;
+	ULONG		BytesPerSector;
+} FILE_FS_SIZE_INFORMATION, *PFILE_FS_SIZE_INFORMATION;
+
+/* FileFsDeviceInformation = 4 */
+typedef struct _FILE_FS_DEVICE_INFORMATION {
+	DEVICE_TYPE DeviceType;
+	ULONG Characteristics;
+} FILE_FS_DEVICE_INFORMATION, *PFILE_FS_DEVICE_INFORMATION;
+
+/* FileFsAttributeInformation = 5 */
+typedef struct _FILE_FS_ATTRIBUTE_INFORMATION {
+	ULONG	FileSystemAttributes;
+	LONG	MaximumComponentNameLength;
+	ULONG	FileSystemNameLength;
+	WCHAR	FileSystemName[1];
+} FILE_FS_ATTRIBUTE_INFORMATION, *PFILE_FS_ATTRIBUTE_INFORMATION;
+
+/*FileFsControlInformation = 6 */
+/*
+ unknown
+ */
+
+/*FileFsFullSizeInformation = 7 */
+typedef struct _FILE_FS_FULL_SIZE_INFORMATION {
+	LARGE_INTEGER	TotalAllocationUnits;
+	LARGE_INTEGER	CallerAvailableAllocationUnits;
+	LARGE_INTEGER	ActualAvailableAllocationUnits;
+	ULONG		SectorsPerAllocationUnit;
+	ULONG		BytesPerSector;
+} FILE_FS_FULL_SIZE_INFORMATION, *PFILE_FS_FULL_SIZE_INFORMATION;
+
+typedef struct _FILE_PIPE_WAIT_FOR_BUFFER {
+    LARGE_INTEGER   Timeout;
+    ULONG           NameLength;
+    BOOLEAN         TimeoutSpecified;
+    WCHAR           Name[1];
+} FILE_PIPE_WAIT_FOR_BUFFER, *PFILE_PIPE_WAIT_FOR_BUFFER;
+
+typedef struct _FILE_PIPE_PEEK_BUFFER {
+    ULONG   NamedPipeState;
+    ULONG   ReadDataAvailable;
+    ULONG   NumberOfMessages;
+    ULONG   MessageLength;
+    CHAR    Data[1];
+} FILE_PIPE_PEEK_BUFFER, *PFILE_PIPE_PEEK_BUFFER;
+
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 #endif

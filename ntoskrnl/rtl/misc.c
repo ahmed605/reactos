@@ -240,17 +240,6 @@ AVrfInternalHeapFreeNotification(PVOID AllocationBase, SIZE_T AllocationSize)
 }
 
 
-NTSTATUS
-NTAPI
-NtQueryLicenseValue(PUNICODE_STRING Name,
-                    ULONG *Type,
-                    PVOID Buffer,
-                    ULONG Length,
-                    ULONG *DataLength)
-{
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
 
 
 /* EOF */
