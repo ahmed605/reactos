@@ -341,9 +341,7 @@ WSPSocket(int AddressFamily,
                                 0);
 
     /* Create the Socket as asynchronous. That means we have to block
-    ourselves after every call to NtDeviceIoControlFile. This is
-    because the kernel doesn't support overlapping synchronous I/O
-    requests (made from multiple threads) at this time (Sep 2005) */
+    ourselves after every call to NtDeviceIoControlFile. */
     Status = NtCreateFile(&Sock,
                           GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
                           &Object,
@@ -2173,6 +2171,187 @@ Leave:
 
     return MsafdReturnWithErrno(Status, lpErrno, 0, NULL);
 }
+
+BOOL
+WSPAPI
+WSPConnectEx(
+    IN SOCKET Handle,
+    IN const struct sockaddr *SocketAddress,
+    IN int SocketAddressLength,
+    IN PVOID lpSendBuffer,
+    IN DWORD dwSendDataLength,
+    OUT LPDWORD lpdwBytesSent,
+    IN OUT LPOVERLAPPED lpOverlapped)
+{
+    IO_STATUS_BLOCK            DummyIOSB;
+    PIO_STATUS_BLOCK           IOSB = &DummyIOSB;
+    PAFD_CONNECT_INFO          ConnectInfo = NULL;
+    PSOCKET_INFORMATION        Socket;
+    NTSTATUS                   Status;
+    INT                        Errno;
+    int                        SocketDataLength;
+    UCHAR Buffer[128];
+
+    FIXME("WSPConnectEx(%x)\n", Handle);
+    if (lpSendBuffer)
+    {
+        FIXME("WSPConnectEx: TODO send buffer\n");
+    }
+    static BOOL b = FALSE;
+    if (!b)
+    {
+        b = TRUE;
+        DebugBreak();
+    }
+
+
+    if (!lpOverlapped)
+    {
+        SetLastError(E_INVALIDARG);
+        return FALSE;
+    }
+
+    /* Get the Socket Structure associate to this Socket*/
+    Socket = GetSocketStructure(Handle);
+    if (!Socket)
+    {
+        SetLastError(WSAENOTSOCK);
+        return FALSE;
+    }
+
+    if (SocketAddressLength > 128 - sizeof(AFD_CONNECT_INFO)) {
+        SetLastError(WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+    ConnectInfo = (PAFD_CONNECT_INFO)Buffer;
+
+    /* Bind us First */
+    if (Socket->SharedData->State == SocketOpen)
+    {
+        INT BindAddressLength;
+        PSOCKADDR BindAddress;
+        INT BindError;
+
+        /* Get the Wildcard Address */
+        BindAddressLength = Socket->HelperData->MaxWSAddressLength;
+        BindAddress = HeapAlloc(GetProcessHeap(), 0, BindAddressLength);
+        if (!BindAddress)
+        {
+           SetLastError(STATUS_INSUFFICIENT_RESOURCES);
+           return FALSE;
+        }
+        Socket->HelperData->WSHGetWildcardSockaddr(Socket->HelperContext,
+                                                   BindAddress,
+                                                   &BindAddressLength);
+        /* Bind it */
+        BindError = WSPBind(Handle, BindAddress, BindAddressLength, NULL);
+        HeapFree(GetProcessHeap(), 0, BindAddress);
+        if (BindError == SOCKET_ERROR)
+        {
+            SetLastError(SOCKET_ERROR);
+            return FALSE;
+        }
+    }
+
+    /* Calculate the size of SocketAddress->sa_data */
+    SocketDataLength = SocketAddressLength - FIELD_OFFSET(struct sockaddr, sa_data);
+
+    /* Set up Address in TDI Format */
+    ConnectInfo->RemoteAddress.TAAddressCount = 1;
+    ConnectInfo->RemoteAddress.Address[0].AddressLength = SocketDataLength;
+    ConnectInfo->RemoteAddress.Address[0].AddressType = SocketAddress->sa_family;
+    RtlCopyMemory(ConnectInfo->RemoteAddress.Address[0].Address,
+                  SocketAddress->sa_data,
+                  SocketDataLength);
+
+    /*
+    * Disable FD_WRITE and FD_CONNECT
+    * The latter fixes a race condition where the FD_CONNECT is re-enabled
+    * at the end of this function right after the Async Thread disables it.
+    * This should only happen at the *next* WSPConnect
+    */
+    if (Socket->SharedData->AsyncEvents & FD_CONNECT)
+    {
+        Socket->SharedData->AsyncDisabledEvents |= FD_CONNECT | FD_WRITE;
+    }
+
+    /* AFD doesn't seem to care if these are invalid, but let's 0 them anyways */
+    ConnectInfo->Root = 0;
+    ConnectInfo->UseSAN = FALSE;
+    ConnectInfo->Unknown = 0;
+
+    IOSB = (PIO_STATUS_BLOCK)lpOverlapped;
+    IOSB->Status = STATUS_PENDING;
+    /* Send IOCTL */
+    Status = NtDeviceIoControlFile((HANDLE)Handle,
+                                   lpOverlapped->hEvent,
+                                   NULL,
+                                   lpOverlapped->hEvent ? NULL : lpOverlapped,
+                                   IOSB,
+                                   IOCTL_AFD_CONNECT,
+                                   ConnectInfo,
+                                   FIELD_OFFSET(AFD_CONNECT_INFO, RemoteAddress.Address[0].Address[SocketDataLength]),
+                                   NULL,
+                                   0);
+
+    if (Status == STATUS_PENDING)
+    {
+        TRACE("ConnectEx: Leaving (Pending)\n");
+        SetLastError(WSA_IO_PENDING);
+        return FALSE;
+    }
+
+
+    Socket->SharedData->SocketLastError = TranslateNtStatusError(Status);
+    if (Status != STATUS_SUCCESS)
+        goto Leave;
+
+    Socket->SharedData->State = SocketConnected;
+    Socket->TdiConnectionHandle = (HANDLE)IOSB->Information;
+    Socket->SharedData->ConnectTime = GetCurrentTimeInSeconds();
+
+Leave:
+    TRACE("Ending %lx\n", Status);
+
+    /* Re-enable Async Event */
+    SockReenableAsyncSelectEvent(Socket, FD_WRITE);
+
+    /* FIXME: THIS IS NOT RIGHT!!! HACK HACK HACK! */
+    SockReenableAsyncSelectEvent(Socket, FD_CONNECT);
+
+    if (Status == STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT))
+    {
+        Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                              Socket->Handle,
+                                              Socket->TdiAddressHandle,
+                                              Socket->TdiConnectionHandle,
+                                              WSH_NOTIFY_CONNECT);
+
+        if (Errno)
+        {
+//            if (lpErrno) *lpErrno = Errno;
+            SetLastError(STATUS_UNABLE_TO_DECOMMIT_VM);
+            return FALSE;
+        }
+    }
+    else if (Status != STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT_ERROR))
+    {
+        Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                              Socket->Handle,
+                                              Socket->TdiAddressHandle,
+                                              Socket->TdiConnectionHandle,
+                                              WSH_NOTIFY_CONNECT_ERROR);
+
+        if (Errno)
+        {
+         SetLastError(STATUS_UNABLE_TO_DECOMMIT_VM);
+            return FALSE;
+        }
+    }
+
+    return Status == S_OK ? TRUE : FALSE;
+}
+
 int
 WSPAPI
 WSPShutdown(SOCKET Handle,
@@ -2902,11 +3081,11 @@ WSPSetSockOpt(
         if (lpErrno) *lpErrno = WSAENOTSOCK;
         return SOCKET_ERROR;
     }
-    if (!optval)
+    /*if (!optval)
     {
         if (lpErrno) *lpErrno = WSAEFAULT;
         return SOCKET_ERROR;
-    }
+    }*/
 
 
     /* FIXME: We should handle some more cases here */
@@ -3062,7 +3241,10 @@ WSPSetSockOpt(
            case SO_DONTROUTE:
               /* These go directly to the helper dll */
               goto SendToHelper;
-
+           case SO_UPDATE_CONNECT_CONTEXT:
+                // HACK: its probably connected
+                Socket->SharedData->State = SocketConnected;
+                return NO_ERROR;
            default:
               /* Obviously this is a hack */
               ERR("MSAFD: Set unknown optname %x\n", optname);
