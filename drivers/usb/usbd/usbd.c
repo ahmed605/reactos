@@ -37,10 +37,82 @@
 #include <ntddk.h>
 #include <usbdi.h>
 #include <usbdlib.h>
+#include "usbd.h"
 #include <debug.h>
 #ifndef PLUGPLAY_REGKEY_DRIVER
 #define PLUGPLAY_REGKEY_DRIVER              2
 #endif
+
+typedef struct _USBD_GLOBAL_CHILD_ENTRY {
+    LIST_ENTRY Link;
+    PVOID ChildInstance;
+    PVOID HubInstance;
+    USHORT PortNumber;
+    PVOID ConnectorId;
+    USHORT IdVendor;
+    USHORT IdProduct;
+    ULONG State;
+    ULONG SerialLengthInBytes;
+    PWCHAR SerialBuffer;
+} USBD_GLOBAL_CHILD_ENTRY, *PUSBD_GLOBAL_CHILD_ENTRY;
+
+#define USBD_GLOBAL_TAG 'DBSU'
+#define USBD_MAX_HUB_NUMBERS 256
+
+#define USBD_GLOBAL_CHILD_STATE_CONNECTED 1
+#define USBD_GLOBAL_CHILD_STATE_DISCONNECTED 2
+
+static KSPIN_LOCK g_UsbdGlobalsLock;
+static BOOLEAN g_UsbdGlobalsInitialized = FALSE;
+static LIST_ENTRY g_UsbdGlobalChildListHead;
+static RTL_BITMAP g_UsbdHubNumberBitmap;
+static ULONG g_UsbdHubNumberBitmapBuffer[(USBD_MAX_HUB_NUMBERS + 31) / 32];
+
+static
+VOID
+Usbdp_InitGlobals(VOID)
+{
+    if (g_UsbdGlobalsInitialized) {
+        return;
+    }
+
+    // Best-effort, benign race: all initializations are idempotent.
+    KeInitializeSpinLock(&g_UsbdGlobalsLock);
+    InitializeListHead(&g_UsbdGlobalChildListHead);
+    RtlInitializeBitMap(&g_UsbdHubNumberBitmap,
+                        g_UsbdHubNumberBitmapBuffer,
+                        USBD_MAX_HUB_NUMBERS);
+    RtlClearAllBits(&g_UsbdHubNumberBitmap);
+    // Windows reserves hub number 0; allocation starts at 1.
+    RtlSetBits(&g_UsbdHubNumberBitmap, 0, 1);
+    g_UsbdGlobalsInitialized = TRUE;
+}
+
+static
+BOOLEAN
+Usbdp_EqualUsbIdStringRaw(
+    _In_ PUSB_ID_STRING A,
+    _In_ ULONG BLengthInBytes,
+    _In_ PWCHAR BBuffer
+    )
+{
+    SIZE_T matched;
+
+    if (A == NULL || A->Buffer == NULL || A->LengthInBytes == 0) {
+        return FALSE;
+    }
+
+    if (A->LengthInBytes != BLengthInBytes) {
+        return FALSE;
+    }
+
+    if (BBuffer == NULL) {
+        return FALSE;
+    }
+
+    matched = RtlCompareMemory(BBuffer, A->Buffer, A->LengthInBytes);
+    return (matched == (SIZE_T)A->LengthInBytes);
+}
 
 NTSTATUS NTAPI
 DriverEntry(PDRIVER_OBJECT DriverObject,
@@ -141,6 +213,188 @@ USBD_Dispatch(ULONG Unknown1, ULONG Unknown2, ULONG Unknown3, ULONG Unknown4)
 {
     UNIMPLEMENTED;
     return 1;
+}
+
+/*
+ * @implemented
+ */
+ULONG NTAPI
+USBD_AllocateHubNumber(VOID)
+{
+    KIRQL irql;
+    ULONG bit;
+
+    Usbdp_InitGlobals();
+
+    KeAcquireSpinLock(&g_UsbdGlobalsLock, &irql);
+    bit = RtlFindClearBitsAndSet(&g_UsbdHubNumberBitmap, 1, 0);
+    KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+
+    if (bit == 0xFFFFFFFF) {
+        return 0;
+    }
+
+    // Bitmap index itself is the hub number (0 is reserved).
+    return bit;
+}
+
+/*
+ * @implemented
+ */
+USBD_CHILD_STATUS NTAPI
+USBD_AddDeviceToGlobalList(
+    PVOID ChildInstance,
+    PVOID HubInstance,
+    USHORT PortNumber,
+    PVOID ConnectorId,
+    USHORT IdVendor,
+    USHORT IdProduct,
+    PUSB_ID_STRING SerialNumber
+    )
+{
+    KIRQL irql;
+    PLIST_ENTRY entry;
+    PUSBD_GLOBAL_CHILD_ENTRY childEntry;
+
+    UNREFERENCED_PARAMETER(ConnectorId);
+    UNREFERENCED_PARAMETER(PortNumber);
+
+    Usbdp_InitGlobals();
+
+    // No serial number => no global duplicate tracking.
+    if (SerialNumber == NULL || SerialNumber->Buffer == NULL || SerialNumber->LengthInBytes == 0) {
+        return USBD_CHILD_STATUS_INSERTED;
+    }
+
+    KeAcquireSpinLock(&g_UsbdGlobalsLock, &irql);
+
+    for (entry = g_UsbdGlobalChildListHead.Flink;
+         entry != &g_UsbdGlobalChildListHead;
+         entry = entry->Flink) {
+
+        childEntry = CONTAINING_RECORD(entry, USBD_GLOBAL_CHILD_ENTRY, Link);
+
+        if (childEntry->IdVendor != IdVendor || childEntry->IdProduct != IdProduct) {
+            continue;
+        }
+
+        if (!Usbdp_EqualUsbIdStringRaw(SerialNumber,
+                                       childEntry->SerialLengthInBytes,
+                                       childEntry->SerialBuffer)) {
+            continue;
+        }
+
+        // Windows has special handling around disconnected entries and connector IDs.
+        if (childEntry->State == USBD_GLOBAL_CHILD_STATE_DISCONNECTED) {
+            BOOLEAN samePortAndHub =
+                (PortNumber == childEntry->PortNumber) &&
+                (HubInstance != NULL) &&
+                (HubInstance == childEntry->HubInstance);
+            BOOLEAN sameConnector =
+                (ConnectorId != NULL) &&
+                (ConnectorId == childEntry->ConnectorId);
+
+            if (samePortAndHub || sameConnector) {
+                KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+                return USBD_CHILD_STATUS_INSERTED;
+            }
+
+            KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+            return USBD_CHILD_STATUS_DUPLICATE_PENDING_REMOVAL;
+        }
+
+        // Connected duplicate: if we have a connector ID and it matches, treat as pending removal.
+        if ((ConnectorId != NULL || childEntry->ConnectorId != NULL) && (ConnectorId == childEntry->ConnectorId)) {
+            KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+            return USBD_CHILD_STATUS_DUPLICATE_PENDING_REMOVAL;
+        }
+
+        // Otherwise, a true duplicate.
+        KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+        return USBD_CHILD_STATUS_DUPLICATE_FOUND;
+    }
+
+    KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+
+    childEntry = (PUSBD_GLOBAL_CHILD_ENTRY)ExAllocatePoolWithTag(NonPagedPool,
+                                                                 sizeof(*childEntry),
+                                                                 USBD_GLOBAL_TAG);
+    if (childEntry == NULL) {
+        return USBD_CHILD_STATUS_FAILURE;
+    }
+
+    RtlZeroMemory(childEntry, sizeof(*childEntry));
+    childEntry->ChildInstance = ChildInstance;
+    childEntry->HubInstance = HubInstance;
+    childEntry->PortNumber = PortNumber;
+    childEntry->ConnectorId = ConnectorId;
+    childEntry->IdVendor = IdVendor;
+    childEntry->IdProduct = IdProduct;
+    childEntry->State = USBD_GLOBAL_CHILD_STATE_CONNECTED;
+    childEntry->SerialLengthInBytes = SerialNumber->LengthInBytes;
+    childEntry->SerialBuffer = (PWCHAR)ExAllocatePoolWithTag(NonPagedPool,
+                                                            SerialNumber->LengthInBytes,
+                                                            USBD_GLOBAL_TAG);
+    if (childEntry->SerialBuffer == NULL) {
+        ExFreePoolWithTag(childEntry, USBD_GLOBAL_TAG);
+        return USBD_CHILD_STATUS_FAILURE;
+    }
+    RtlCopyMemory(childEntry->SerialBuffer, SerialNumber->Buffer, SerialNumber->LengthInBytes);
+
+    KeAcquireSpinLock(&g_UsbdGlobalsLock, &irql);
+
+    // Re-check after allocation to avoid races.
+    for (entry = g_UsbdGlobalChildListHead.Flink;
+         entry != &g_UsbdGlobalChildListHead;
+         entry = entry->Flink) {
+
+        PUSBD_GLOBAL_CHILD_ENTRY existing = CONTAINING_RECORD(entry, USBD_GLOBAL_CHILD_ENTRY, Link);
+
+        if (existing->IdVendor != IdVendor || existing->IdProduct != IdProduct) {
+            continue;
+        }
+
+        if (existing->SerialLengthInBytes != childEntry->SerialLengthInBytes) {
+            continue;
+        }
+
+        if (RtlCompareMemory(existing->SerialBuffer,
+                             childEntry->SerialBuffer,
+                             existing->SerialLengthInBytes) != (SIZE_T)existing->SerialLengthInBytes) {
+            continue;
+        }
+
+        KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+        ExFreePoolWithTag(childEntry->SerialBuffer, USBD_GLOBAL_TAG);
+        ExFreePoolWithTag(childEntry, USBD_GLOBAL_TAG);
+
+        if (existing->State == USBD_GLOBAL_CHILD_STATE_DISCONNECTED) {
+            BOOLEAN samePortAndHub =
+                (PortNumber == existing->PortNumber) &&
+                (HubInstance != NULL) &&
+                (HubInstance == existing->HubInstance);
+            BOOLEAN sameConnector =
+                (ConnectorId != NULL) &&
+                (ConnectorId == existing->ConnectorId);
+
+            if (samePortAndHub || sameConnector) {
+                return USBD_CHILD_STATUS_INSERTED;
+            }
+
+            return USBD_CHILD_STATUS_DUPLICATE_PENDING_REMOVAL;
+        }
+
+        if ((ConnectorId != NULL || existing->ConnectorId != NULL) && (ConnectorId == existing->ConnectorId)) {
+            return USBD_CHILD_STATUS_DUPLICATE_PENDING_REMOVAL;
+        }
+
+        return USBD_CHILD_STATUS_DUPLICATE_FOUND;
+    }
+
+    InsertTailList(&g_UsbdGlobalChildListHead, &childEntry->Link);
+    KeReleaseSpinLock(&g_UsbdGlobalsLock, irql);
+
+    return USBD_CHILD_STATUS_INSERTED;
 }
 
 /*
