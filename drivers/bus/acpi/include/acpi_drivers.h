@@ -235,6 +235,9 @@ void acpi_power_exit (void);
 
 int acpi_processor_set_thermal_limit(ACPI_HANDLE handle, int type);
 
+int acpi_processor_init(void);
+void acpi_processor_exit(void);
+
 
 /* --------------------------------------------------------------------------
                                      System

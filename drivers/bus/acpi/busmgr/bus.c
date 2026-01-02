@@ -1791,6 +1791,7 @@ acpi_init (void)
 	acpi_power_init();	/* ACPI Bus Power Management */
 	acpi_button_init();
 	acpi_ec_init();		/* ACPI Embedded Controller */
+	acpi_processor_init();	/* ACPI Processor */
 #ifdef CONFIG_ACPI_PCI
 	if (!acpi_pci_disabled) {
 		acpi_pci_link_init();	/* ACPI PCI Interrupt Link */
