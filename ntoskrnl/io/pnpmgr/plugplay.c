@@ -12,6 +12,12 @@
 #define NDEBUG
 #include <debug.h>
 
+/* NOTE: Implemented in ntoskrnl/ps/process.c but not declared in public headers. */
+LPSTR
+NTAPI
+PsGetProcessImageFileName(
+    _In_ PEPROCESS Process);
+
 typedef struct _PNP_EVENT_ENTRY
 {
     LIST_ENTRY ListEntry;
@@ -29,6 +35,26 @@ typedef struct _IOP_FIND_DEVICE_INSTANCE_TRAVERSE_CONTEXT
 
 static LIST_ENTRY IopPnpEventQueueHead;
 static KEVENT IopPnpNotifyEvent;
+
+static volatile LONG IopPnpEventSequence;
+
+static
+ULONG
+IopGetPnpEventQueueDepth(VOID)
+{
+    ULONG Depth = 0;
+    PLIST_ENTRY Entry;
+
+    for (Entry = IopPnpEventQueueHead.Flink;
+         Entry != &IopPnpEventQueueHead;
+         Entry = Entry->Flink)
+    {
+        ++Depth;
+        if (Depth > 0xFFFF) break;
+    }
+
+    return Depth;
+}
 
 /* FUNCTIONS *****************************************************************/
 
@@ -90,6 +116,13 @@ IopQueueDeviceChangeEvent(
                0,
                FALSE);
 
+        DPRINT("PNP-QUEUE[%ld]: DeviceClassChangeEvent Guid {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} Link %wZ\n",
+            InterlockedIncrement((PLONG)&IopPnpEventSequence),
+            EventGuid->Data1, EventGuid->Data2, EventGuid->Data3,
+            EventGuid->Data4[0], EventGuid->Data4[1], EventGuid->Data4[2], EventGuid->Data4[3],
+            EventGuid->Data4[4], EventGuid->Data4[5], EventGuid->Data4[6], EventGuid->Data4[7],
+            SymbolicLinkName);
+
     return STATUS_SUCCESS;
 }
 
@@ -128,6 +161,13 @@ IopQueueDeviceInstallEvent(
     InsertHeadList(&IopPnpEventQueueHead, &EventEntry->ListEntry);
 
     KeSetEvent(&IopPnpNotifyEvent, 0, FALSE);
+
+        DPRINT("PNP-QUEUE[%ld]: DeviceInstallEvent Guid {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} DeviceId %wZ\n",
+            InterlockedIncrement((PLONG)&IopPnpEventSequence),
+            EventGuid->Data1, EventGuid->Data2, EventGuid->Data3,
+            EventGuid->Data4[0], EventGuid->Data4[1], EventGuid->Data4[2], EventGuid->Data4[3],
+            EventGuid->Data4[4], EventGuid->Data4[5], EventGuid->Data4[6], EventGuid->Data4[7],
+            DeviceId);
 
     return STATUS_SUCCESS;
 }
@@ -178,6 +218,14 @@ IopQueueTargetDeviceEvent(const GUID *Guid,
     KeSetEvent(&IopPnpNotifyEvent,
                0,
                FALSE);
+
+        DPRINT1("PNP-QUEUE[%ld]: TargetDeviceChangeEvent Guid {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} DeviceIds %wZ (depth=%lu)\n",
+            InterlockedIncrement((PLONG)&IopPnpEventSequence),
+            Guid->Data1, Guid->Data2, Guid->Data3,
+            Guid->Data4[0], Guid->Data4[1], Guid->Data4[2], Guid->Data4[3],
+            Guid->Data4[4], Guid->Data4[5], Guid->Data4[6], Guid->Data4[7],
+            DeviceIds,
+            IopGetPnpEventQueueDepth());
 
     return STATUS_SUCCESS;
 }
@@ -391,10 +439,62 @@ NTSTATUS
 IopRemovePlugPlayEvent(
     _In_ PPLUGPLAY_CONTROL_USER_RESPONSE_DATA ResponseData)
 {
+    LONG Seq;
+    ULONG Depth;
+    PCHAR ImageName;
+
+    Seq = InterlockedIncrement((PLONG)&IopPnpEventSequence);
+    Depth = IopGetPnpEventQueueDepth();
+
+        ImageName = PsGetProcessImageFileName(PsGetCurrentProcess());
+        DPRINT("PNP-USERRESP[%ld]: pid=%p tid=%p image=%s resp={%lx,%lx,%lx,%lx} depth=%lu empty=%d\n",
+            Seq,
+            PsGetCurrentProcessId(),
+            PsGetCurrentThreadId(),
+            ImageName ? ImageName : "?",
+            ResponseData->Unknown1,
+            ResponseData->Unknown2,
+            ResponseData->Unknown3,
+            ResponseData->Unknown4,
+            Depth,
+            IsListEmpty(&IopPnpEventQueueHead));
+
     /* Remove a pnp event entry from the tail of the queue */
     if (!IsListEmpty(&IopPnpEventQueueHead))
     {
+        PPNP_EVENT_ENTRY Entry;
+        Entry = CONTAINING_RECORD(IopPnpEventQueueHead.Blink,
+                                  PNP_EVENT_ENTRY,
+                                  ListEntry);
+
+        DPRINT("PNP-DEQUEUE[%ld]: Removing Category=%lu TotalSize=%lu depth=%lu Guid {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
+                Seq,
+                Entry->Event.EventCategory,
+                Entry->Event.TotalSize,
+                Depth,
+                Entry->Event.EventGuid.Data1, Entry->Event.EventGuid.Data2, Entry->Event.EventGuid.Data3,
+                Entry->Event.EventGuid.Data4[0], Entry->Event.EventGuid.Data4[1], Entry->Event.EventGuid.Data4[2], Entry->Event.EventGuid.Data4[3],
+                Entry->Event.EventGuid.Data4[4], Entry->Event.EventGuid.Data4[5], Entry->Event.EventGuid.Data4[6], Entry->Event.EventGuid.Data4[7]);
+
+        if (Entry->Event.EventCategory == DeviceInstallEvent)
+        {
+            DPRINT("PNP-DEQUEUE: Install DeviceId=%S\n", Entry->Event.InstallDevice.DeviceId);
+        }
+        else if (Entry->Event.EventCategory == TargetDeviceChangeEvent)
+        {
+            DPRINT("PNP-DEQUEUE: Target DeviceIds=%S\n", Entry->Event.TargetDevice.DeviceIds);
+        }
+        else if (Entry->Event.EventCategory == DeviceClassChangeEvent)
+        {
+            DPRINT("PNP-DEQUEUE: Class SymbolicLink=%S\n", Entry->Event.DeviceClass.SymbolicLinkName);
+        }
+
         ExFreePool(CONTAINING_RECORD(RemoveTailList(&IopPnpEventQueueHead), PNP_EVENT_ENTRY, ListEntry));
+    }
+    else
+    {
+        DPRINT1("PNP-DEQUEUE[%ld]: Queue empty\n", Seq);
+        return STATUS_NO_MORE_ENTRIES;
     }
 
     /* Signal the next pnp event in the queue */
@@ -1487,15 +1587,44 @@ NtGetPlugPlayEvent(IN ULONG Reserved1,
                                    NULL);
     if (!NT_SUCCESS(Status) || Status == STATUS_USER_APC)
     {
-        DPRINT("KeWaitForSingleObject() failed (Status %lx)\n", Status);
-        ASSERT(Status == STATUS_USER_APC);
+        DPRINT("NtGetPlugPlayEvent: KeWaitForSingleObject failed (Status %lx)\n", Status);
         return Status;
+    }
+
+    if (IsListEmpty(&IopPnpEventQueueHead))
+    {
+        DPRINT("NtGetPlugPlayEvent: woke but queue empty (pid=%p tid=%p)\n",
+                PsGetCurrentProcessId(),
+                PsGetCurrentThreadId());
+        return STATUS_NO_MORE_ENTRIES;
     }
 
     /* Get entry from the tail of the queue */
     Entry = CONTAINING_RECORD(IopPnpEventQueueHead.Blink,
                               PNP_EVENT_ENTRY,
                               ListEntry);
+
+    DPRINT("PNP-GET[%ld]: Category=%lu TotalSize=%lu depth=%lu Guid {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
+            InterlockedIncrement((PLONG)&IopPnpEventSequence),
+            Entry->Event.EventCategory,
+            Entry->Event.TotalSize,
+            IopGetPnpEventQueueDepth(),
+            Entry->Event.EventGuid.Data1, Entry->Event.EventGuid.Data2, Entry->Event.EventGuid.Data3,
+            Entry->Event.EventGuid.Data4[0], Entry->Event.EventGuid.Data4[1], Entry->Event.EventGuid.Data4[2], Entry->Event.EventGuid.Data4[3],
+            Entry->Event.EventGuid.Data4[4], Entry->Event.EventGuid.Data4[5], Entry->Event.EventGuid.Data4[6], Entry->Event.EventGuid.Data4[7]);
+
+    if (Entry->Event.EventCategory == DeviceInstallEvent)
+    {
+        DPRINT("PNP-GET: Install DeviceId=%S\n", Entry->Event.InstallDevice.DeviceId);
+    }
+    else if (Entry->Event.EventCategory == TargetDeviceChangeEvent)
+    {
+        DPRINT("PNP-GET: Target DeviceIds=%S\n", Entry->Event.TargetDevice.DeviceIds);
+    }
+    else if (Entry->Event.EventCategory == DeviceClassChangeEvent)
+    {
+        DPRINT("PNP-GET: Class SymbolicLink=%S\n", Entry->Event.DeviceClass.SymbolicLinkName);
+    }
 
     /* Check the buffer size */
     if (BufferSize < Entry->Event.TotalSize)
