@@ -12,6 +12,8 @@
 
 DBG_DEFAULT_CHANNEL(EngDev);
 
+extern BOOLEAN IsRDDMOn;
+
 static PGRAPHICS_DEVICE gpPrimaryGraphicsDevice;
 static PGRAPHICS_DEVICE gpVgaGraphicsDevice;
 
@@ -573,6 +575,14 @@ EngpUpdateMonitorDevices(
     ULONG i, bytesWritten, monitorCount;
     NTSTATUS Status;
 
+    /*
+     * NOTE: IOCTL_VIDEO_ENUM_MONITOR_PDO and the related PnP re-enumeration flow
+     * are VIDEOPRT-specific. With RDDM (dxgkrnl-based stack), these IOCTLs are
+     * not implemented and must not be used.
+     */
+    if (IsRDDMOn)
+        return STATUS_SUCCESS;
+
     /* Request right PDO for device relations */
     Status = EngpPnPTargetRelationRequest(pGraphicsDevice->DeviceObject, &pDeviceRelations);
     if (!NT_SUCCESS(Status))
@@ -686,29 +696,36 @@ EngpRegisterGraphicsDevice(
     pGraphicsDevice->DeviceObject = pDeviceObject;
     pGraphicsDevice->FileObject = pFileObject;
 
-    /* Initialize and register the device with videoprt for Win32k callbacks */
-    Win32kCallbacks.PhysDisp = pGraphicsDevice;
-    Win32kCallbacks.Callout = VideoPortCallout;
-    // Reset the data being returned prior to the call.
-    Win32kCallbacks.bACPI = FALSE;
-    Win32kCallbacks.pPhysDeviceObject = NULL;
-    Win32kCallbacks.DualviewFlags = 0;
-    Status = (NTSTATUS)EngDeviceIoControl((HANDLE)pDeviceObject,
-                                          IOCTL_VIDEO_INIT_WIN32K_CALLBACKS,
-                                          &Win32kCallbacks,
-                                          sizeof(Win32kCallbacks),
-                                          &Win32kCallbacks,
-                                          sizeof(Win32kCallbacks),
-                                          &ulReturn);
-    if (Status != ERROR_SUCCESS)
+    if (!IsRDDMOn)
     {
-        ERR("EngDeviceIoControl(0x%p, IOCTL_VIDEO_INIT_WIN32K_CALLBACKS) failed, Status 0x%lx\n",
-            pDeviceObject, Status);
+        /* Initialize and register the device with videoprt for Win32k callbacks */
+        Win32kCallbacks.PhysDisp = pGraphicsDevice;
+        Win32kCallbacks.Callout = VideoPortCallout;
+        // Reset the data being returned prior to the call.
+        Win32kCallbacks.bACPI = FALSE;
+        Win32kCallbacks.pPhysDeviceObject = NULL;
+        Win32kCallbacks.DualviewFlags = 0;
+        Status = (NTSTATUS)EngDeviceIoControl((HANDLE)pDeviceObject,
+                                              IOCTL_VIDEO_INIT_WIN32K_CALLBACKS,
+                                              &Win32kCallbacks,
+                                              sizeof(Win32kCallbacks),
+                                              &Win32kCallbacks,
+                                              sizeof(Win32kCallbacks),
+                                              &ulReturn);
+        if (Status != ERROR_SUCCESS)
+        {
+            ERR("EngDeviceIoControl(0x%p, IOCTL_VIDEO_INIT_WIN32K_CALLBACKS) failed, Status 0x%lx\n",
+                pDeviceObject, Status);
+        }
+        // TODO: Set flags according to the results.
+        // if (Win32kCallbacks.bACPI)
+        // if (Win32kCallbacks.DualviewFlags & ???)
+        pGraphicsDevice->PhysDeviceHandle = Win32kCallbacks.pPhysDeviceObject;
     }
-    // TODO: Set flags according to the results.
-    // if (Win32kCallbacks.bACPI)
-    // if (Win32kCallbacks.DualviewFlags & ???)
-    pGraphicsDevice->PhysDeviceHandle = Win32kCallbacks.pPhysDeviceObject;
+    else
+    {
+        pGraphicsDevice->PhysDeviceHandle = NULL;
+    }
 
     /* Copy the device name */
     RtlStringCbCopyNW(pGraphicsDevice->szNtDeviceName,
@@ -755,8 +772,9 @@ EngpRegisterGraphicsDevice(
                   pustrDescription->Length);
     pGraphicsDevice->pwszDescription[pustrDescription->Length/sizeof(WCHAR)] = 0;
 
-    /* Update list of connected monitors */
-    EngpUpdateMonitorDevices(pGraphicsDevice);
+    /* Update list of connected monitors (VIDEOPRT only) */
+    if (!IsRDDMOn)
+        EngpUpdateMonitorDevices(pGraphicsDevice);
 
     /* Lock loader */
     EngAcquireSemaphore(ghsemGraphicsDeviceList);

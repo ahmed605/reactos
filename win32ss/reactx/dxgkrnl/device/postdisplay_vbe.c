@@ -389,6 +389,7 @@ RxgkpTryProgramVbeAndCache(_In_opt_ HANDLE DeviceHandleForTargetId)
             if (FrameBufferVa)
             {
                 RtlZeroMemory(FrameBufferVa, FrameBufferSize);
+                RtlFillMemory(FrameBufferVa, FrameBufferSize, 0x00FF0000);
                 MmUnmapIoSpace(FrameBufferVa, FrameBufferSize);
             }
         }
