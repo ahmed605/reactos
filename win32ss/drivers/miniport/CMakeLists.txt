@@ -1,5 +1,6 @@
 
 add_subdirectory(bochs)
+add_subdirectory(KMDOD)
 add_subdirectory(vbe)
 add_subdirectory(vga)
 #add_subdirectory(vga_new)

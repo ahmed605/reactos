@@ -42,3 +42,27 @@ KeQueryActiveProcessors(VOID)
 {
     return KeActiveProcessors;
 }
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeGetProcessorNumberFromIndex(IN ULONG ProcIndex,
+                              OUT PPROCESSOR_NUMBER ProcNumber)
+{
+    if (ProcNumber == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ProcIndex >= (ULONG)KeNumberProcessors)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcNumber->Group = 0;
+    ProcNumber->Number = (UCHAR)ProcIndex;
+    ProcNumber->Reserved = 0;
+    return STATUS_SUCCESS;
+}

@@ -722,9 +722,14 @@ EngpRegisterGraphicsDevice(
                        L"\\\\.\\DISPLAY%d",
                        (int)giDevNum);
 
-    /* Allocate a buffer for the strings */
-    cj = pustrDiplayDrivers->Length + pustrDescription->Length + sizeof(WCHAR);
-    pwsz = ExAllocatePoolWithTag(PagedPool, cj, GDITAG_DRVSUP);
+    /*
+     * Allocate a buffer for the strings.
+     * pustrDiplayDrivers is a REG_MULTI_SZ: ensure it is always double-NUL terminated,
+     * otherwise consumers may walk into the following description buffer and interpret
+     * garbage as additional driver names.
+     */
+    cj = pustrDiplayDrivers->Length + (2 * sizeof(WCHAR)) + pustrDescription->Length + sizeof(WCHAR);
+    pwsz = ExAllocatePoolZero(PagedPool, cj, GDITAG_DRVSUP);
     if (!pwsz)
     {
         ERR("Could not allocate string buffer\n");
@@ -739,8 +744,12 @@ EngpRegisterGraphicsDevice(
                   pustrDiplayDrivers->Buffer,
                   pustrDiplayDrivers->Length);
 
+    /* Enforce REG_MULTI_SZ double terminator */
+    pGraphicsDevice->pDiplayDrivers[pustrDiplayDrivers->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    pGraphicsDevice->pDiplayDrivers[pustrDiplayDrivers->Length / sizeof(WCHAR) + 1] = UNICODE_NULL;
+
     /* Copy the description */
-    pGraphicsDevice->pwszDescription = pwsz + pustrDiplayDrivers->Length / sizeof(WCHAR);
+    pGraphicsDevice->pwszDescription = pwsz + (pustrDiplayDrivers->Length / sizeof(WCHAR)) + 2;
     RtlCopyMemory(pGraphicsDevice->pwszDescription,
                   pustrDescription->Buffer,
                   pustrDescription->Length);

@@ -16,6 +16,19 @@
  */
 static REACTOS_WIN32K_DXGKRNL_INTERFACE DxgAdapterCallbacks = {0};
 
+BOOLEAN IsRDDMOn = FALSE;
+#define IOCTL_VIDEO_I_AM_REACTOS \
+	CTL_CODE(FILE_DEVICE_VIDEO, 0xB, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_GIVE_CALLSBACK \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0xC, METHOD_NEITHER, FILE_ANY_ACCESS)
+PFILE_OBJECT RxgkFileObject;
+PDEVICE_OBJECT RxgkDeviceObject;
+
+#ifdef NONAMELESSUNION
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).u.Status)
+#else
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).Status)
+#endif
 /*
  * This looks like it's done inside DxDdStartupDxGraphics, but I'd rather keep this organized.
  * Dxg gets start inevitably anyway it seems at least on vista.
@@ -25,10 +38,77 @@ APIENTRY
 DxStartupDxgkInt(VOID)
 {
     DPRINT("DxStartupDxgkInt: Entry\n");
-    /*
-     * TODO: Let DxgKrnl know it's time to start all adapters, and obtain the win32k<->dxgkrnl interface via an IOCTRL. 
-     * https://jira.reactos.org/browse/CORE-20027
-     */
+    PIRP Irp;
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING DestinationString;
+    NTSTATUS Status = STATUS_PROCEDURE_NOT_FOUND;
+
+    DPRINT1("TryHackedDxgkrnlAdapterStart: Attempting to see if this is windows Dxgkrnl\n");
+    /* First let's grab the RDDM objects */
+    RtlInitUnicodeString(&DestinationString, L"\\Device\\DxgKrnl");
+    Status = IoGetDeviceObjectPointer(&DestinationString, FILE_ALL_ACCESS, &RxgkFileObject, &RxgkDeviceObject);
+    if(Status != STATUS_SUCCESS)
+    {
+        DPRINT1("Setting up DxgKrnl Failed\n");
+        goto BypassDxgkrnl;
+    }
+
+    /* Build event and create IRP */
+    DPRINT1("TryHackedDxgkrnlAdapterStart: Building IOCTRL with DxgKrnl\n");
+    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_I_AM_REACTOS,
+                                          RxgkDeviceObject,
+                                          NULL,
+                                          0,
+                                          NULL,
+                                          0,
+                                          TRUE,
+                                          &Event,
+                                          &IoStatusBlock);
+    Status = IofCallDriver(RxgkDeviceObject, Irp);
+    DPRINT1("TryHackedDxgkrnlAdapterStart: Status %d\n", RXGK_IOSB_STATUS(IoStatusBlock));
+    if (RXGK_IOSB_STATUS(IoStatusBlock) != STATUS_SUCCESS)
+    {
+        DPRINT1("Wait... This is Windows DXGKNRL.SYS >:(\n");
+        IsRDDMOn = TRUE;
+        return;
+    }
+    else
+    {
+        DPRINT1("TryHackedDxgkrnlAdapterStart: ReactOS AdapterStart hack triggered\n");
+        IsRDDMOn = TRUE;
+
+        /* Obtain the win32k<->dxgkrnl callback table */
+        KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+        Irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_GIVE_CALLSBACK,
+                                            RxgkDeviceObject,
+                                            NULL,
+                                            0,
+                                            &DxgAdapterCallbacks,
+                                            sizeof(DxgAdapterCallbacks),
+                                            TRUE,
+                                            &Event,
+                                            &IoStatusBlock);
+
+        if (Irp)
+        {
+            Status = IofCallDriver(RxgkDeviceObject, Irp);
+            if (Status == STATUS_PENDING)
+                KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+
+            DPRINT1("DxStartupDxgkInt: IOCTL_VIDEO_GIVE_CALLSBACK -> 0x%08X\n", RXGK_IOSB_STATUS(IoStatusBlock));
+        }
+        else
+        {
+            DPRINT1("DxStartupDxgkInt: Failed to build GIVE_CALLSBACK IRP\n");
+        }
+
+        return;
+    }
+BypassDxgkrnl:
+    DPRINT1("TryHackedDxgkrnlAdapterStart: Dxgkrnl is not loaded\n");
+    return;
 }
 
 BOOLEAN

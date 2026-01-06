@@ -8,6 +8,47 @@
 #include <rxgkrnl.h>
 //#define NDEBUG
 #include <debug.h>
+#include <ntddk.h>  /* For CTL_CODE and other DDK macros */
+#include <reactos/rddm/rxgkinterface.h>
+
+#ifdef NONAMELESSUNION
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).u.Status)
+#else
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).Status)
+#endif
+
+
+
+/* Create an IO request to fill out the function pointer list */
+#define IOCTL_VIDEO_DDI_FUNC_REGISTER \
+	CTL_CODE( FILE_DEVICE_VIDEO, 0xF, METHOD_NEITHER, FILE_ANY_ACCESS  )
+
+/* Alternate registration IOCTL observed in the wild */
+#define IOCTL_VIDEO_DDI_FUNC_REGISTER_ALT \
+    CTL_CODE( FILE_DEVICE_VIDEO, 0x11, METHOD_NEITHER, FILE_ANY_ACCESS  )
+
+/* Private reactos Dxgkrnl trigger */
+#define IOCTL_VIDEO_I_AM_REACTOS \
+	CTL_CODE(FILE_DEVICE_VIDEO, 0xB, METHOD_NEITHER, FILE_ANY_ACCESS)
+
+/* Private reactos callback trigger */
+#define IOCTL_VIDEO_GIVE_CALLSBACK \
+	CTL_CODE(FILE_DEVICE_VIDEO, 0xC, METHOD_NEITHER, FILE_ANY_ACCESS)
+
+NTSTATUS
+RxgKmtQueryAdapterInfo(_Inout_ PVOID unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kPresent(_In_ D3DKMT_PRESENT* unnamedParam1);
 
 NTSTATUS
 NTAPI
@@ -22,29 +63,67 @@ RxgkInternalDeviceControl(
     PAGED_CODE();
 
     /* First let's grab the IOCTRL code */
-    IrpStack = Irp->Tail.Overlay.CurrentStackLocation;
-    IoControlCode = IrpStack->Parameters.Read.ByteOffset.LowPart;
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IrpStack = IoGetCurrentIrpStackLocation(Irp);
+    IoControlCode = IrpStack->Parameters.DeviceIoControl.IoControlCode;
+    if (IoControlCode == 0)
+    {
+        /* Backwards-compat: older bring-up paths may have stuffed the IOCTL here */
+        IoControlCode = IrpStack->Parameters.Read.ByteOffset.LowPart;
+    }
+    RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
 
     switch (IoControlCode)
     {
         case IOCTL_VIDEO_DDI_FUNC_REGISTER:
+        case IOCTL_VIDEO_DDI_FUNC_REGISTER_ALT:
             /*
              * Grab a reference to the InitializeMiniport function so we can acquire the Miniport
              * callback list and continue setup
              */
             OutputBuffer = (PVOID*)Irp->UserBuffer;
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+            if (!OutputBuffer)
+            {
+                RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_INVALID_PARAMETER;
+                break;
+            }
             *OutputBuffer = (PVOID)RxgkPortInitializeMiniport;
+            break;
+        case IOCTL_VIDEO_I_AM_REACTOS:
+            OutputBuffer = (PVOID*)Irp->UserBuffer;
+            Irp->IoStatus.Information = 0;
+            RXGK_IOSB_STATUS(Irp->IoStatus) = RxgkStartAdapter();
+            break;
+        case IOCTL_VIDEO_GIVE_CALLSBACK:
+            DPRINT1("Obtaining callbacks\n");
+            {
+                PREACTOS_WIN32K_DXGKRNL_INTERFACE Callbacks;
+
+                Callbacks = (PREACTOS_WIN32K_DXGKRNL_INTERFACE)Irp->UserBuffer;
+                if (!Callbacks)
+                {
+                    Irp->IoStatus.Information = 0;
+                    RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                RtlZeroMemory(Callbacks, sizeof(*Callbacks));
+                Callbacks->RxgkIntPfnPresent = RxgkWin32kPresent;
+                Callbacks->RxgkIntPfnGetDisplayModeList = RxgkWin32kGetDisplayModeList;
+                Callbacks->RxgkIntPfnSetDisplayMode = RxgkWin32kSetDisplayMode;
+
+                Irp->IoStatus.Information = sizeof(*Callbacks);
+                RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;
+            }
             break;
         default:
             DPRINT("RxgkInternalDeviceControl: unknown IOCTRL Code: %X\n", IoControlCode);
+            RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_INVALID_DEVICE_REQUEST;
             break;
     }
 
     IofCompleteRequest(Irp, 0);
-    return STATUS_SUCCESS;
+    return RXGK_IOSB_STATUS(Irp->IoStatus);
 }
 
 VOID
@@ -70,7 +149,7 @@ RxgkUnused(
     IofCompleteRequest(Irp, 0);
     return STATUS_SUCCESS;
 }
-
+ 
 EXTERN_C
 NTSTATUS
 NTAPI
@@ -85,6 +164,7 @@ DriverEntry(
     /* First fillout dispatch table */
     DriverObject->MajorFunction[IRP_MJ_CREATE] = RxgkUnused;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = RxgkUnused;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = RxgkInternalDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = RxgkInternalDeviceControl;
     DriverObject->DriverUnload = RxgkUnload;
 
@@ -101,7 +181,7 @@ DriverEntry(
         DPRINT1("DriverEntry Failed with status %X", Status);
 
     DPRINT1("ReactOS Display Driver Model:\n");
-    DPRINT1("Targetting Version: 0x%X\n", 0x1000);
-
+    DPRINT1("Targetting Version: 0x%X\n", DXGKDDI_INTERFACE_VERSION_VISTA);
+    RxgkpSetupDxgkrnl(DriverObject, RegistryPath);
     return Status;
 }

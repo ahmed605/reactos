@@ -2334,11 +2334,7 @@ BOOL
 APIENTRY
 EngRestoreFloatingPointState(
     _In_reads_(_Inexpressible_(statesize))
-    PVOID pBuffer)
-{
-    UNREFERENCED_PARAMETER(pBuffer);
-    return TRUE;
-}
+    PVOID pBuffer);
 
 _Check_return_
 _Success_(((pBuffer != NULL && cjBufferSize != 0) && return == 1) ||
@@ -2352,10 +2348,7 @@ APIENTRY
 EngSaveFloatingPointState(
     _At_(*pBuffer, _Kernel_requires_resource_not_held_(EngFloatState))
     _Out_writes_bytes_opt_(cjBufferSize) PVOID pBuffer,
-    _Inout_ ULONG cjBufferSize)
-{
-    return ((((pBuffer) == NULL) || ((cjBufferSize) == 0)) ? 8 : TRUE);
-}
+    _Inout_ ULONG cjBufferSize);
 
 #else /* !(defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA)) */
 

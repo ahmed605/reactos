@@ -7,7 +7,14 @@ spec2def(dxgkrnl.sys dxgkrnl.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
      entry.cpp
+     device/dxgkrnlinterface.cpp
+    device/postdisplay_vbe.c
+     miniport/registry.cpp
+     miniport/rxgkdispatch.cpp
      miniport/rxgkport.cpp
+     videoss/vidpininterface.cpp
+    kmt/win32k_callbacks.cpp
+     kmt/d3dkmt_test.cpp
      )
 
 add_library(dxgkrnl MODULE

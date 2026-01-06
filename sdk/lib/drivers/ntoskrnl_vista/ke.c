@@ -111,8 +111,44 @@ KeQueryLogicalProcessorRelationship(
     _Out_writes_bytes_opt_(*Length) PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Information,
     _Inout_ PULONG Length)
 {
-    UNIMPLEMENTED;
-    return STATUS_INVALID_PARAMETER;
+    ULONG RequiredLength;
+    KAFFINITY ActiveMask;
+    ULONG ActiveCount;
+
+    UNREFERENCED_PARAMETER(ProcessorNumber);
+
+    if (Length == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Minimal single-group topology (group 0) */
+    RequiredLength = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Group.GroupInfo) +
+                     sizeof(PROCESSOR_GROUP_INFO);
+
+    if ((Information == NULL) || (*Length < RequiredLength))
+    {
+        *Length = RequiredLength;
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    RtlZeroMemory(Information, RequiredLength);
+
+    ActiveMask = KeQueryActiveProcessors();
+    ActiveCount = KeQueryActiveProcessorCount(NULL);
+
+    UNREFERENCED_PARAMETER(RelationshipType);
+    Information->Relationship = RelationGroup;
+    Information->Size = RequiredLength;
+
+    Information->Group.MaximumGroupCount = 1;
+    Information->Group.ActiveGroupCount = 1;
+    Information->Group.GroupInfo[0].MaximumProcessorCount = (UCHAR)ActiveCount;
+    Information->Group.GroupInfo[0].ActiveProcessorCount = (UCHAR)ActiveCount;
+    Information->Group.GroupInfo[0].ActiveProcessorMask = ActiveMask;
+
+    *Length = RequiredLength;
+    return STATUS_SUCCESS;
 }
 
 NTKRNLVISTAAPI

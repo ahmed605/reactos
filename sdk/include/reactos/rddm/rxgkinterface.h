@@ -7,6 +7,29 @@
 
 #pragma once
 
+/*
+ * This header defines the private win32k <-> dxgkrnl callback interface.
+ * The callback prototypes use D3DKMT_* types, which live in d3dkmthk.h.
+ * d3dkmthk.h expects D3DKMT_PTR to be defined (via d3dukmdt.h).
+ */
+#include <d3dukmdt.h>
+
+/*
+ * d3dkmthk.h references PALETTEENTRY (from wingdi.h). dxgkrnl builds don't
+ * include wingdi.h, so provide the minimal definition when needed.
+ */
+#ifndef _PALETTEENTRY_DEFINED
+typedef struct tagPALETTEENTRY
+{
+    BYTE peRed;
+    BYTE peGreen;
+    BYTE peBlue;
+    BYTE peFlags;
+} PALETTEENTRY, *PPALETTEENTRY, *LPPALETTEENTRY;
+#define _PALETTEENTRY_DEFINED
+#endif
+
+#include <d3dkmthk.h>
 #include <d3dkmddi.h>
 
 /*
