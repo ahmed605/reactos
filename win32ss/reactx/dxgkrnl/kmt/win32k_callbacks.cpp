@@ -3,6 +3,7 @@
 
 #include <reactos/rddm/rxgkinterface.h>
 #include <include/rxgkpostdisplay.h>
+#include "include/vidpnss.h"
 
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 
@@ -14,9 +15,6 @@ NTSTATUS
 APIENTRY
 RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
 {
-    D3DKMT_DISPLAYMODE Mode;
-    DXGK_DISPLAY_INFORMATION DispInfo;
-
     if (!Args)
         return STATUS_INVALID_PARAMETER;
 
@@ -26,8 +24,49 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
             (ULONG)Args->ModeCount,
             Args->pModeList);
 
+    // Return enumerated modes if available
+    if (RxgkDriverExtension)
+    {
+        KIRQL OldIrql;
+        KeAcquireSpinLock(&RxgkDriverExtension->EnumeratedModesLock, &OldIrql);
+        
+        if (RxgkDriverExtension->EnumeratedModes && RxgkDriverExtension->EnumeratedModeCount > 0)
+        {
+            ULONG ModeCount = RxgkDriverExtension->EnumeratedModeCount;
+            
+            // First call: return count only
+            if (!Args->pModeList)
+            {
+                Args->ModeCount = ModeCount;
+                KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+                return STATUS_SUCCESS;
+            }
+            
+            // Second call: return actual modes
+            if (Args->ModeCount < ModeCount)
+            {
+                Args->ModeCount = ModeCount;
+                KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            
+            // Copy enumerated modes
+            RtlCopyMemory(Args->pModeList, 
+                         RxgkDriverExtension->EnumeratedModes,
+                         ModeCount * sizeof(D3DKMT_DISPLAYMODE));
+            Args->ModeCount = ModeCount;
+            KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+        
+        KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+    }
+    
+    // Fallback: return a single default mode if enumeration hasn't happened yet
+    D3DKMT_DISPLAYMODE Mode;
+    DXGK_DISPLAY_INFORMATION DispInfo;
+    
     RtlZeroMemory(&Mode, sizeof(Mode));
-
     RtlZeroMemory(&DispInfo, sizeof(DispInfo));
     if (!RxgkPostDisplayTryGetDisplayInfo(&DispInfo))
     {
@@ -220,7 +259,10 @@ APIENTRY
 RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
 {
     NTSTATUS Status;
-    D3DKMDT_HVIDPN hVidPn;
+    D3DKMDT_HVIDPN hConstrainingVidPn = NULL;
+    D3DKMDT_HVIDPN hFunctionalVidPn = NULL;
+    D3DKMT_DISPLAYMODE RequestedMode;
+    BOOLEAN ModeFound = FALSE;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -232,73 +274,177 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
             (UINT)Args->DisplayOrientation,
             (UINT)Args->Flags.PreserveVidPn);
 
-    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiCommitVidPn)
+    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiCommitVidPn || !RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality)
         return STATUS_NOT_SUPPORTED;
 
-    Status = RxgkCreateVidPn(&hVidPn);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    // First, check if there's a desired mode set (by CDD or other caller)
+    KIRQL OldIrql;
+    DXGK_DISPLAY_INFORMATION DispInfo;
+    RtlZeroMemory(&DispInfo, sizeof(DispInfo));
+    
+    KeAcquireSpinLock(&RxgkDriverExtension->DesiredModeLock, &OldIrql);
+    if (RxgkDriverExtension->DesiredModeValid && RxgkDriverExtension->pDesiredMode)
+    {
+        RequestedMode = *RxgkDriverExtension->pDesiredMode;
+        ModeFound = TRUE;
+        // Clear the desired mode after using it
+        if (RxgkDriverExtension->pDesiredMode)
+        {
+            ExFreePoolWithTag(RxgkDriverExtension->pDesiredMode, 'RXGK');
+            RxgkDriverExtension->pDesiredMode = NULL;
+        }
+        RxgkDriverExtension->DesiredModeValid = FALSE;
+    }
+    KeReleaseSpinLock(&RxgkDriverExtension->DesiredModeLock, OldIrql);
+    
+    // If no desired mode, get mode information from primary allocation or current display info
+    if (!ModeFound)
+    {
+        if (!RxgkPostDisplayTryGetDisplayInfo(&DispInfo))
+        {
+            // Fallback to default
+            DispInfo.Width = 800;
+            DispInfo.Height = 600;
+            DispInfo.Pitch = 800 * 4;
+            DispInfo.ColorFormat = D3DDDIFMT_A8R8G8B8;
+        }
 
-    Status = RxgkBuildSimpleFunctionalVidPn(&hVidPn, 0, 0);
+        // Try to find matching mode from enumerated modes
+        KIRQL OldIrql2;
+        KeAcquireSpinLock(&RxgkDriverExtension->EnumeratedModesLock, &OldIrql2);
+        if (RxgkDriverExtension->EnumeratedModes && RxgkDriverExtension->EnumeratedModeCount > 0)
+        {
+            // Find mode matching the current display dimensions
+            for (ULONG i = 0; i < RxgkDriverExtension->EnumeratedModeCount; i++)
+            {
+                if (RxgkDriverExtension->EnumeratedModes[i].Width == (UINT)DispInfo.Width &&
+                    RxgkDriverExtension->EnumeratedModes[i].Height == (UINT)DispInfo.Height)
+                {
+                    RequestedMode = RxgkDriverExtension->EnumeratedModes[i];
+                    ModeFound = TRUE;
+                    break;
+                }
+            }
+        }
+        KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql2);
+    }
+
+    // If no matching mode found, use current display info
+    if (!ModeFound)
+    {
+        RtlZeroMemory(&RequestedMode, sizeof(RequestedMode));
+        RequestedMode.Width = (UINT)DispInfo.Width;
+        RequestedMode.Height = (UINT)DispInfo.Height;
+        RequestedMode.Format = D3DDDIFMT_A8R8G8B8;
+        RequestedMode.IntegerRefreshRate = 60;
+        RequestedMode.RefreshRate.Numerator = 60;
+        RequestedMode.RefreshRate.Denominator = 1;
+        RequestedMode.ScanLineOrdering = Args->ScanLineOrdering ? Args->ScanLineOrdering : D3DDDI_VSSLO_PROGRESSIVE;
+        RequestedMode.DisplayOrientation = Args->DisplayOrientation ? Args->DisplayOrientation : D3DDDI_ROTATION_IDENTITY;
+    }
+    else
+    {
+        // Override with Args if provided
+        if (Args->ScanLineOrdering != 0)
+            RequestedMode.ScanLineOrdering = Args->ScanLineOrdering;
+        if (Args->DisplayOrientation != 0)
+            RequestedMode.DisplayOrientation = Args->DisplayOrientation;
+    }
+
+    DPRINT1("RxgkWin32kSetDisplayMode: Setting mode %ux%u format=%u refresh=%u/%u\n",
+            RequestedMode.Width, RequestedMode.Height, RequestedMode.Format,
+            RequestedMode.RefreshRate.Numerator, RequestedMode.RefreshRate.Denominator);
+
+    // Build a constraining VidPN with the requested mode
+    // This tells the miniport what mode we want, and it will create a functional VidPN
+    Status = RxgkBuildConstrainingVidPnWithMode(&hConstrainingVidPn, 0, 0, &RequestedMode);
     if (!NT_SUCCESS(Status))
     {
-        RxgkDestroyVidPn(hVidPn);
+        DPRINT1("RxgkWin32kSetDisplayMode: RxgkBuildConstrainingVidPnWithMode failed 0x%08X\n", Status);
         return Status;
     }
 
+    // Use EnumVidPnCofuncModality to modify the constraining VidPN in place
+    // The miniport will add modes and pin the appropriate ones to make it functional
+    {
+        DXGKARG_ENUMVIDPNCOFUNCMODALITY EnumCofuncModalityArgs;
+        RtlZeroMemory(&EnumCofuncModalityArgs, sizeof(EnumCofuncModalityArgs));
+        EnumCofuncModalityArgs.hConstrainingVidPn = hConstrainingVidPn;
+        EnumCofuncModalityArgs.EnumPivotType = D3DKMDT_EPT_NOPIVOT;
+        EnumCofuncModalityArgs.EnumPivot.VidPnSourceId = 0;
+        EnumCofuncModalityArgs.EnumPivot.VidPnTargetId = 0;
+
+        Status = RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality(
+            RxgkDriverExtension->MiniportContext,
+            &EnumCofuncModalityArgs);
+        
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkWin32kSetDisplayMode: EnumVidPnCofuncModality failed 0x%08X\n", Status);
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return Status;
+        }
+
+        // The constraining VidPN has been modified in place and is now functional
+        hFunctionalVidPn = hConstrainingVidPn;
+        hConstrainingVidPn = NULL; // Don't destroy it, we'll use it for commit
+    }
+
+    // Validate MiniportContext before committing
+    if (!RxgkDriverExtension->MiniportContext)
+    {
+        DPRINT1("RxgkWin32kSetDisplayMode: MiniportContext is NULL, cannot commit VidPN\n");
+        RxgkDestroyVidPn(hFunctionalVidPn);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    // Now commit the functional VidPN that the miniport created
+    // NOTE: VBoxWddm's DxgkDdiCommitVidPn expects pDevExt->aSources and pDevExt->aTargets to be initialized.
+    // These are initialized in DxgkDdiStartDevice, which is called during RxgkStartAdapter.
+    // If SetDisplayMode is called before StartDevice, CommitVidPn will fail or crash.
+    // For now, we'll call CommitVidPn and let VBoxWddm handle the initialization.
     {
         DXGKARG_COMMITVIDPN CommitArgs;
         RtlZeroMemory(&CommitArgs, sizeof(CommitArgs));
-        CommitArgs.hFunctionalVidPn = hVidPn;
+        CommitArgs.hFunctionalVidPn = hFunctionalVidPn;
         CommitArgs.AffectedVidPnSourceId = 0;
         CommitArgs.MonitorConnectivityChecks = D3DKMDT_MCC_ENFORCE;
-        CommitArgs.hPrimaryAllocation = (HANDLE)(ULONG_PTR)Args->hPrimaryAllocation;
+        // VBoxWddm expects hPrimaryAllocation to be a valid PVBOXWDDM_ALLOCATION pointer or NULL
+        // The synthetic handle (1) from CDD is not a valid pointer, so pass NULL
+        // VBoxWddm will create its own allocation internally if needed
+        CommitArgs.hPrimaryAllocation = NULL;
+        CommitArgs.Flags.PathPowerTransition = 0;
+        CommitArgs.Flags.PathPoweredOff = 0;
 
+        DPRINT1("RxgkWin32kSetDisplayMode: Committing VidPN with hPrimaryAlloc=NULL MiniportContext=%p\n",
+                RxgkDriverExtension->MiniportContext);
+        
+        // CRITICAL: VBoxWddm's DxgkDdiCommitVidPn expects:
+        // 1. hAdapter (MiniportContext) to be a valid PVBOXMP_DEVEXT pointer
+        // 2. pDevExt->aSources and pDevExt->aTargets to be initialized (they are in vboxWddmDevExtZeroinit)
+        // 3. VBoxCommonFromDeviceExt(pDevExt)->cDisplays to be > 0
+        // If any of these are invalid, CommitVidPn will fail or crash.
+        // The crash in vboxWddmAssignPrimary with pSource=NULL suggests paSources[VidPnSourceId] is NULL,
+        // which means either paSources allocation failed or VidPnSourceId is out of bounds.
+        // Since we're using AffectedVidPnSourceId=0, the issue is likely that paSources allocation failed
+        // because VBoxCommonFromDeviceExt(pDevExt)->cDisplays is 0 or invalid.
         Status = RxgkDriverExtension->DxgkDdiCommitVidPn(RxgkDriverExtension->MiniportContext, &CommitArgs);
         DPRINT1("RxgkWin32kSetDisplayMode: CommitVidPn -> 0x%08X\n", Status);
+        
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkWin32kSetDisplayMode: CommitVidPn failed 0x%08X\n", Status);
+            // Don't fail completely - the mode might have been set already
+        }
     }
 
-    if (NT_SUCCESS(Status) && RxgkDriverExtension->DxgkDdiSetVidPnSourceAddress)
-    {
-        DXGKARG_SETVIDPNSOURCEADDRESS SetAddressArgs;
-        RtlZeroMemory(&SetAddressArgs, sizeof(SetAddressArgs));
-        SetAddressArgs.VidPnSourceId = 0;
-        SetAddressArgs.PrimarySegment = 0;
-        SetAddressArgs.PrimaryAddress.QuadPart = 0;
-        SetAddressArgs.hAllocation = (HANDLE)(ULONG_PTR)Args->hPrimaryAllocation;
-        SetAddressArgs.ContextCount = 0;
-        SetAddressArgs.Flags.Value = 0;
-        SetAddressArgs.Flags.ModeChange = 1;
+    // Clean up
+    if (hFunctionalVidPn)
+        RxgkDestroyVidPn(hFunctionalVidPn);
 
-        Status = RxgkDriverExtension->DxgkDdiSetVidPnSourceAddress(RxgkDriverExtension->MiniportContext, &SetAddressArgs);
-        DPRINT1("RxgkWin32kSetDisplayMode: SetVidPnSourceAddress -> 0x%08X\n", Status);
-    }
-
-    if (NT_SUCCESS(Status) && RxgkDriverExtension->DxgkDdiSetVidPnSourceVisibility)
-    {
-        DXGKARG_SETVIDPNSOURCEVISIBILITY SetVisibilityArgs;
-        RtlZeroMemory(&SetVisibilityArgs, sizeof(SetVisibilityArgs));
-        SetVisibilityArgs.VidPnSourceId = 0;
-        SetVisibilityArgs.Visible = TRUE;
-
-        Status = RxgkDriverExtension->DxgkDdiSetVidPnSourceVisibility(RxgkDriverExtension->MiniportContext, &SetVisibilityArgs);
-        DPRINT1("RxgkWin32kSetDisplayMode: SetVidPnSourceVisibility -> 0x%08X\n", Status);
-    }
-
-    if (NT_SUCCESS(Status) && RxgkDriverExtension->DxgkDdiUpdateActiveVidPnPresentPath)
-    {
-        DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH UpdatePathArgs;
-        RtlZeroMemory(&UpdatePathArgs, sizeof(UpdatePathArgs));
-        UpdatePathArgs.VidPnPresentPathInfo.VidPnSourceId = 0;
-        UpdatePathArgs.VidPnPresentPathInfo.VidPnTargetId = 0;
-
-        Status = RxgkDriverExtension->DxgkDdiUpdateActiveVidPnPresentPath(RxgkDriverExtension->MiniportContext, &UpdatePathArgs);
-        DPRINT1("RxgkWin32kSetDisplayMode: UpdateActiveVidPnPresentPath -> 0x%08X\n", Status);
-    }
-
-    RxgkDestroyVidPn(hVidPn);
     return Status;
 }
+
 
 NTSTATUS
 APIENTRY
@@ -383,3 +529,5 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
                 Status, DirtyRect.left, DirtyRect.top, DirtyRect.right, DirtyRect.bottom);
     return Status;
 }
+
+

@@ -18,6 +18,12 @@
 #include <dispmprt.h>
 #include <d3dkmddi.h>
 
+// Forward declaration for D3DKMT_DISPLAYMODE (defined in d3dkmthk.h, which has user-mode dependencies)
+// The full definition is included in implementation files that need it
+struct _D3DKMT_DISPLAYMODE;
+typedef struct _D3DKMT_DISPLAYMODE D3DKMT_DISPLAYMODE;
+typedef D3DKMT_DISPLAYMODE* PD3DKMT_DISPLAYMODE;
+
 typedef struct _RXGK_PRIVATE_EXTENSION
 {
     // Driver Data
@@ -72,6 +78,17 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PKINTERRUPT InterruptObject;
     KSPIN_LOCK InterruptSpinLock;
      KINTERRUPT_MODE InterruptMode;
+
+    // Enumerated display modes (populated during StartAdapter)
+    PD3DKMT_DISPLAYMODE EnumeratedModes;
+    ULONG EnumeratedModeCount;
+    KSPIN_LOCK EnumeratedModesLock; // Protects EnumeratedModes and EnumeratedModeCount
+    
+    // Desired mode for SetDisplayMode (set by CDD when mode change is requested)
+    // Using a pointer to avoid including d3dkmthk.h in this header
+    PD3DKMT_DISPLAYMODE pDesiredMode;
+    BOOLEAN DesiredModeValid;
+    KSPIN_LOCK DesiredModeLock; // Protects pDesiredMode and DesiredModeValid
 
 } RXGK_PRIVATE_EXTENSION, *PRXGK_PRIVATE_EXTENSION;
 

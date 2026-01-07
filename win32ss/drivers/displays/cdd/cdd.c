@@ -12,11 +12,10 @@
 #define RXGK_IOSB_STATUS(_iosb) ((_iosb).Status)
 #endif
 
-static REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkCallbacks;
-static BOOLEAN g_DxgkCallbacksValid = FALSE;
+REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkCallbacks;
+BOOLEAN g_DxgkCallbacksValid = FALSE;
 static LONG g_CddDbgPresentCalls = 0;
 
-static
 BOOL
 CddEnsureDxgkCallbacks(VOID)
 {
@@ -290,7 +289,8 @@ CddUnlockPrimary(_Inout_ PCDDPDEV ppdev)
 
 static
 BOOL
-CddQueryDxgkDisplayMode(_Out_ D3DKMT_DISPLAYMODE* Mode)
+CddQueryDxgkDisplayModeList(_Out_ D3DKMT_DISPLAYMODE* ModeList,
+                            _Inout_ ULONG* ModeCount)
 {
    NTSTATUS Status;
    PFILE_OBJECT FileObject = NULL;
@@ -302,10 +302,8 @@ CddQueryDxgkDisplayMode(_Out_ D3DKMT_DISPLAYMODE* Mode)
    REACTOS_WIN32K_DXGKRNL_INTERFACE Callbacks;
    D3DKMT_GETDISPLAYMODELIST Args;
 
-   if (!Mode)
+   if (!ModeCount)
       return FALSE;
-
-   RtlZeroMemory(Mode, sizeof(*Mode));
 
    RtlInitUnicodeString(&DestinationString, L"\\Device\\DxgKrnl");
    Status = IoGetDeviceObjectPointer(&DestinationString, FILE_ALL_ACCESS, &FileObject, &DeviceObject);
@@ -340,15 +338,50 @@ CddQueryDxgkDisplayMode(_Out_ D3DKMT_DISPLAYMODE* Mode)
       return FALSE;
    }
 
+   // First call: get the count
    RtlZeroMemory(&Args, sizeof(Args));
    Args.hAdapter = 0;
    Args.VidPnSourceId = 0;
-   Args.ModeCount = 1;
-   Args.pModeList = Mode;
+   Args.pModeList = NULL;
+   Args.ModeCount = 0;
    Status = Callbacks.RxgkIntPfnGetDisplayModeList(&Args);
+   if (!NT_SUCCESS(Status))
+   {
+      ObDereferenceObject(FileObject);
+      return FALSE;
+   }
+
+   // Check if caller just wants the count
+   if (!ModeList)
+   {
+      *ModeCount = Args.ModeCount;
+      ObDereferenceObject(FileObject);
+      return TRUE;
+   }
+
+   // Second call: get the modes
+   if (*ModeCount < Args.ModeCount)
+   {
+      *ModeCount = Args.ModeCount;
+      ObDereferenceObject(FileObject);
+      return FALSE; // Buffer too small
+   }
+
+   Args.pModeList = ModeList;
+   Args.ModeCount = *ModeCount;
+   Status = Callbacks.RxgkIntPfnGetDisplayModeList(&Args);
+   *ModeCount = Args.ModeCount;
 
    ObDereferenceObject(FileObject);
    return NT_SUCCESS(Status);
+}
+
+static
+BOOL
+CddQueryDxgkDisplayMode(_Out_ D3DKMT_DISPLAYMODE* Mode)
+{
+   ULONG ModeCount = 1;
+   return CddQueryDxgkDisplayModeList(Mode, &ModeCount);
 }
 
 static LOGFONTW SystemFont = { 16, 7, 0, 0, 700, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, VARIABLE_PITCH | FF_DONTCARE, L"System" };
@@ -543,8 +576,8 @@ IntInitScreenInfo(
     * Select the video mode depending on the info passed in pDevMode.
     */
 
-   if (pDevMode->dmPelsWidth == 0 && pDevMode->dmPelsHeight == 0 &&
-       pDevMode->dmBitsPerPel == 0 && pDevMode->dmDisplayFrequency == 0)
+   if (!pDevMode || (pDevMode->dmPelsWidth == 0 && pDevMode->dmPelsHeight == 0 &&
+       pDevMode->dmBitsPerPel == 0 && pDevMode->dmDisplayFrequency == 0))
    {
       ModeInfoPtr = ModeInfo;
       while (ModeCount-- > 0)
@@ -582,8 +615,13 @@ IntInitScreenInfo(
 
    if (SelectedMode == NULL)
    {
-      /* No valid mode found: fail init to avoid null deref. */
-      return FALSE;
+      /* No valid mode found: use the first mode we created from CddEnablePrimary */
+      SelectedMode = ModeInfo;
+      if (SelectedMode == NULL || SelectedMode->Length == 0)
+      {
+         DPRINT1("IntInitScreenInfo: No valid mode found and ModeInfo is invalid\n");
+         return FALSE;
+      }
    }
 
    /*
@@ -616,8 +654,16 @@ IntInitScreenInfo(
    pGdiInfo->cPlanes = SelectedMode->NumberOfPlanes;
    pGdiInfo->ulVRefresh = SelectedMode->Frequency;
    pGdiInfo->ulBltAlignment = 1;
-   pGdiInfo->ulLogPixelsX = pDevMode->dmLogPixels;
-   pGdiInfo->ulLogPixelsY = pDevMode->dmLogPixels;
+   if (pDevMode)
+   {
+      pGdiInfo->ulLogPixelsX = pDevMode->dmLogPixels;
+      pGdiInfo->ulLogPixelsY = pDevMode->dmLogPixels;
+   }
+   else
+   {
+      pGdiInfo->ulLogPixelsX = 96; // Default DPI
+      pGdiInfo->ulLogPixelsY = 96;
+   }
    pGdiInfo->flTextCaps = TC_RA_ABLE;
    pGdiInfo->flRaster = 0;
    pGdiInfo->ulDACRed = SelectedMode->NumberRedBits;
@@ -819,11 +865,22 @@ DrvEnableSurface(
    ScreenSize.cx = ppdev->ScreenWidth;
    ScreenSize.cy = ppdev->ScreenHeight;
 
+   DPRINT1("DrvEnableSurface: Creating bitmap %lux%lu stride=%lu type=%lu ptr=%p\n",
+           ScreenSize.cx, ScreenSize.cy, ppdev->ScreenDelta, BitmapType, ppdev->ScreenPtr);
+
+   if (ScreenSize.cx == 0 || ScreenSize.cy == 0 || ppdev->ScreenDelta == 0 || ppdev->ScreenPtr == NULL)
+   {
+      DPRINT1("DrvEnableSurface: Invalid parameters - W=%lu H=%lu Delta=%lu Ptr=%p\n",
+              ScreenSize.cx, ScreenSize.cy, ppdev->ScreenDelta, ppdev->ScreenPtr);
+      return NULL;
+   }
+
    hSurface = (HSURF)EngCreateBitmap(ScreenSize, ppdev->ScreenDelta, BitmapType,
                                      (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
                                      ppdev->ScreenPtr);
    if (hSurface == NULL)
    {
+      DPRINT1("DrvEnableSurface: EngCreateBitmap failed\n");
       return NULL;
    }
 
@@ -896,37 +953,84 @@ DrvGetModes(_In_ HANDLE hDriver,
             _Out_ DEVMODEW *pdm)
 {
    UNREFERENCED_PARAMETER(hDriver);
-   UNREFERENCED_PARAMETER(cjSize);
 
-   D3DKMT_DISPLAYMODE DxgMode;
-   ULONG OutputSize;
+   ULONG ModeCount = 0;
+   D3DKMT_DISPLAYMODE* DxgModes = NULL;
+   ULONG OutputSize = 0;
+   ULONG MaxModes = 0;
 
-   if (!CddQueryDxgkDisplayMode(&DxgMode))
+   // Get the number of modes
+   if (!CddQueryDxgkDisplayModeList(NULL, &ModeCount))
    {
-      DxgMode.Width = 800;
-      DxgMode.Height = 600;
-      DxgMode.RefreshRate.Numerator = 60;
-      DxgMode.RefreshRate.Denominator = 1;
+      ModeCount = 1; // Fallback
    }
 
    if (pdm == NULL)
-      return sizeof(DEVMODEW);
+   {
+      // Return the size needed
+      return ModeCount * sizeof(DEVMODEW);
+   }
 
-   RtlZeroMemory(pdm, sizeof(DEVMODEW));
-   memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
-   pdm->dmSpecVersion = DM_SPECVERSION;
-   pdm->dmDriverVersion = DM_SPECVERSION;
-   pdm->dmSize = sizeof(DEVMODEW);
-   pdm->dmDriverExtra = 0;
-   pdm->dmBitsPerPel = 32;
-   pdm->dmPelsWidth = (ULONG)DxgMode.Width;
-   pdm->dmPelsHeight = (ULONG)DxgMode.Height;
-   pdm->dmDisplayFrequency = 60;
-   pdm->dmDisplayFlags = 0;
-   pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
-               DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
+   // Allocate buffer for modes
+   MaxModes = cjSize / sizeof(DEVMODEW);
+   if (MaxModes == 0)
+      return 0;
 
-   OutputSize = sizeof(DEVMODEW);
+   DxgModes = (D3DKMT_DISPLAYMODE*)EngAllocMem(FL_ZERO_MEMORY, ModeCount * sizeof(D3DKMT_DISPLAYMODE), ALLOC_TAG);
+   if (!DxgModes)
+   {
+      // Fallback to single mode
+      ModeCount = 1;
+      DxgModes = (D3DKMT_DISPLAYMODE*)EngAllocMem(FL_ZERO_MEMORY, sizeof(D3DKMT_DISPLAYMODE), ALLOC_TAG);
+      if (!DxgModes)
+         return 0;
+      DxgModes[0].Width = 800;
+      DxgModes[0].Height = 600;
+      DxgModes[0].RefreshRate.Numerator = 60;
+      DxgModes[0].RefreshRate.Denominator = 1;
+   }
+   else
+   {
+      ULONG ActualCount = ModeCount;
+      if (!CddQueryDxgkDisplayModeList(DxgModes, &ActualCount))
+      {
+         // Failed to get modes, use fallback
+         ModeCount = 1;
+         DxgModes[0].Width = 800;
+         DxgModes[0].Height = 600;
+         DxgModes[0].RefreshRate.Numerator = 60;
+         DxgModes[0].RefreshRate.Denominator = 1;
+      }
+      else
+      {
+         ModeCount = ActualCount;
+      }
+   }
+
+   // Convert D3DKMT_DISPLAYMODE to DEVMODEW
+   ULONG ModesToReturn = (ModeCount < MaxModes) ? ModeCount : MaxModes;
+   for (ULONG i = 0; i < ModesToReturn; i++)
+   {
+      RtlZeroMemory(&pdm[i], sizeof(DEVMODEW));
+      memcpy(pdm[i].dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
+      pdm[i].dmSpecVersion = DM_SPECVERSION;
+      pdm[i].dmDriverVersion = DM_SPECVERSION;
+      pdm[i].dmSize = sizeof(DEVMODEW);
+      pdm[i].dmDriverExtra = 0;
+      pdm[i].dmBitsPerPel = 32; // Always 32-bit for now
+      pdm[i].dmPelsWidth = DxgModes[i].Width;
+      pdm[i].dmPelsHeight = DxgModes[i].Height;
+      pdm[i].dmDisplayFrequency = (DxgModes[i].RefreshRate.Denominator != 0) ?
+                                   (DxgModes[i].RefreshRate.Numerator / DxgModes[i].RefreshRate.Denominator) : 60;
+      pdm[i].dmDisplayFlags = 0;
+      pdm[i].dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
+                        DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
+   }
+
+   if (DxgModes)
+      EngFreeMem(DxgModes);
+
+   OutputSize = ModesToReturn * sizeof(DEVMODEW);
    return OutputSize;
 }
 
@@ -990,11 +1094,96 @@ DrvEnablePDEV(
    }
 
    ppdev->hDriver = hDriver;
+   
+   // Store the DEVMODE for later use in mode switching
+   if (pdm)
+   {
+      RtlCopyMemory(&ppdev->CurrentDevMode, pdm, min(sizeof(DEVMODEW), pdm->dmSize));
+      ppdev->DevModeValid = TRUE;
+   }
+   else
+   {
+      RtlZeroMemory(&ppdev->CurrentDevMode, sizeof(DEVMODEW));
+      ppdev->DevModeValid = FALSE;
+   }
 
    if (!IntInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {
-      //EngFreeMem(ppdev);
-     // return NULL;
+      // If IntInitScreenInfo failed, try to set basic screen info from CddEnablePrimary
+      ULONG Width = 800, Height = 600, Pitch = 800 * 4, Bpp = 32;
+      if (CddEnablePrimary(ppdev, &Width, &Height, &Pitch, &Bpp))
+      {
+         // Set basic screen info as fallback
+         ppdev->ScreenWidth = Width;
+         ppdev->ScreenHeight = Height;
+         ppdev->ScreenDelta = Pitch;
+         ppdev->BitsPerPixel = (UCHAR)Bpp;
+         ppdev->MemWidth = Width;
+         ppdev->MemHeight = Height;
+         
+         // Set basic GDI info
+         RtlZeroMemory(&GdiInfo, sizeof(GdiInfo));
+         GdiInfo.ulVersion = GDI_DRIVER_VERSION;
+         GdiInfo.ulTechnology = DT_RASDISPLAY;
+         GdiInfo.ulHorzRes = Width;
+         GdiInfo.ulVertRes = Height;
+         GdiInfo.ulPanningHorzRes = Width;
+         GdiInfo.ulPanningVertRes = Height;
+         GdiInfo.cBitsPixel = (UCHAR)((Bpp + 7) / 8 * 8);
+         GdiInfo.cPlanes = 1;
+         GdiInfo.ulVRefresh = 60;
+         GdiInfo.ulBltAlignment = 1;
+         if (pdm)
+         {
+            GdiInfo.ulLogPixelsX = pdm->dmLogPixels;
+            GdiInfo.ulLogPixelsY = pdm->dmLogPixels;
+         }
+         else
+         {
+            GdiInfo.ulLogPixelsX = 96;
+            GdiInfo.ulLogPixelsY = 96;
+         }
+         GdiInfo.flTextCaps = TC_RA_ABLE;
+         GdiInfo.flRaster = 0;
+         GdiInfo.ulDACRed = 8;
+         GdiInfo.ulDACGreen = 8;
+         GdiInfo.ulDACBlue = 8;
+         GdiInfo.ulAspectX = 0x24;
+         GdiInfo.ulAspectY = 0x24;
+         GdiInfo.ulAspectXY = 0x33;
+         GdiInfo.xStyleStep = 1;
+         GdiInfo.yStyleStep = 1;
+         GdiInfo.denStyleStep = 1;
+         GdiInfo.ptlPhysOffset.x = 0;
+         GdiInfo.ptlPhysOffset.y = 0;
+         GdiInfo.szlPhysSize.cx = 0;
+         GdiInfo.szlPhysSize.cy = 0;
+         GdiInfo.ulNumPalReg = 0;
+         GdiInfo.ulHTOutputFormat = HT_FORMAT_32BPP;
+         GdiInfo.flHTFlags = HT_FLAG_ADDITIVE_PRIMS;
+         GdiInfo.ulVRefresh = 60;
+         GdiInfo.ulBltAlignment = 1;
+         GdiInfo.ulPanningHorzRes = Width;
+         GdiInfo.ulPanningVertRes = Height;
+         GdiInfo.ulNumColors = (ULONG)(1 << GdiInfo.cBitsPixel);
+         GdiInfo.ulNumPalReg = 256;
+         GdiInfo.ulDevicePelsDPI = 96;
+         GdiInfo.ulPrimaryOrder = PRIMARY_ORDER_CBA;
+         GdiInfo.ulHTOutputFormat = HT_FORMAT_32BPP;
+         GdiInfo.ulHTOutputFormat = HT_FORMAT_32BPP;
+         GdiInfo.flHTFlags = HT_FLAG_ADDITIVE_PRIMS;
+         GdiInfo.ulNumPalReg = 256;
+         GdiInfo.ulDevicePelsDPI = 96;
+         GdiInfo.ulPrimaryOrder = PRIMARY_ORDER_CBA;
+         GdiInfo.ulHTOutputFormat = HT_FORMAT_32BPP;
+         GdiInfo.flHTFlags = HT_FLAG_ADDITIVE_PRIMS;
+      }
+      else
+      {
+         // Complete failure - free PDEV
+         EngFreeMem(ppdev);
+         return NULL;
+      }
    }
 
    if (!IntInitDefaultPalette(ppdev, &DevInfo))

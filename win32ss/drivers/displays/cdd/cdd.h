@@ -80,6 +80,10 @@ typedef struct _CDDPDEV
 
    /* RDDM / Dxgkrnl interop (bring-up) */
    D3DKMT_HANDLE hPrimaryAllocation;
+   
+   /* Current display mode (from DEVMODE) */
+   DEVMODEW CurrentDevMode;
+   BOOLEAN DevModeValid;
 } CDDPDEV, *PCDDPDEV;
 
 #define DEVICE_NAME	L"cdd"

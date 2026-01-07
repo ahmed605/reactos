@@ -626,9 +626,9 @@ RxgkpEnsurePostDisplayInfoInitialized(
     if (!g_PostDisplayInfoValid)
     {
         RtlZeroMemory(&g_PostDisplayInfoPlusEdid, sizeof(g_PostDisplayInfoPlusEdid));
-        g_PostDisplayInfoPlusEdid.DisplayInfo.Width = 640;
-        g_PostDisplayInfoPlusEdid.DisplayInfo.Height = 480;
-        g_PostDisplayInfoPlusEdid.DisplayInfo.Pitch = 640 * 4;
+        g_PostDisplayInfoPlusEdid.DisplayInfo.Width = 800;
+        g_PostDisplayInfoPlusEdid.DisplayInfo.Height = 600;
+        g_PostDisplayInfoPlusEdid.DisplayInfo.Pitch = 800 * 4;
         g_PostDisplayInfoPlusEdid.DisplayInfo.ColorFormat = D3DDDIFMT_X8R8G8B8;
         g_PostDisplayInfoPlusEdid.DisplayInfo.TargetId = 0;
         g_PostDisplayInfoPlusEdid.DisplayInfo.AcpiId = 0;

@@ -2,6 +2,7 @@
 #include <include/rxgkpostdisplay.h>
 
 #include <debug.h>
+#include <reactos/rddm/rxgkinterface.h> // Includes d3dkmthk.h with proper PALETTEENTRY definition
 
 
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
@@ -377,7 +378,7 @@ RxgkStartAdapter()
     /*
      * Walk through the VidPN network to enumerate all paths and modes AFTER
      * the miniport has populated it. This shows us all the modes that VBoxWddm
-     * (or any miniport) has added.
+     * (or any miniport) has added. Store them for GetDisplayModeList.
      */
     {
         D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology = NULL;
@@ -385,6 +386,11 @@ RxgkStartAdapter()
         const DXGK_VIDPNTOPOLOGY_INTERFACE* pVidPnTopologyInterface = NULL;
         const D3DKMDT_VIDPN_PRESENT_PATH* pVidPnPresentPath = NULL;
         const D3DKMDT_VIDPN_PRESENT_PATH* pVidPnPresentPathNext = NULL;
+        
+        // Collect all modes for storage
+        PD3DKMT_DISPLAYMODE CollectedModes = NULL;
+        ULONG CollectedModeCount = 0;
+        ULONG CollectedModeCapacity = 0;
 
         /* Get the VidPn Interface */
         Status = DxgkrnlInterface.DxgkCbQueryVidPnInterface(hConstrainingVidPn,
@@ -437,7 +443,7 @@ RxgkStartAdapter()
                     (ULONG)pVidPnPresentPath->VidPnSourceId,
                     (ULONG)pVidPnPresentPath->VidPnTargetId);
 
-            /* Enumerate source modes for this path */
+            /* Enumerate source modes for this path - keep it for matching with target modes */
             Status = pVidPnInterface->pfnAcquireSourceModeSet(hConstrainingVidPn,
                                                                pVidPnPresentPath->VidPnSourceId,
                                                                &hVidPnSourceModeSet,
@@ -467,8 +473,7 @@ RxgkStartAdapter()
                     }
                     if (Status == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET)
                         Status = STATUS_SUCCESS;
-
-                    pVidPnInterface->pfnReleaseSourceModeSet(hConstrainingVidPn, hVidPnSourceModeSet);
+                    // Don't release yet - we need it for matching with target modes
                 }
             }
 
@@ -485,7 +490,7 @@ RxgkStartAdapter()
                     DPRINT1("RxgkStartAdapter: Target %lu has %Iu modes\n",
                             (ULONG)pVidPnPresentPath->VidPnTargetId, NumTargetModes);
 
-                    /* Walk through all target modes */
+                    /* Walk through all target modes and collect them */
                     Status = pVidPnTargetModeSetInterface->pfnAcquireFirstModeInfo(hVidPnTargetModeSet, &pVidPnTargetMode);
                     while (NT_SUCCESS(Status) && pVidPnTargetMode)
                     {
@@ -496,6 +501,73 @@ RxgkStartAdapter()
                                 (ULONG)pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Numerator,
                                 (ULONG)pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Denominator);
 
+                        // Collect this mode: match it with a source mode of the same resolution
+                        const D3DKMDT_VIDPN_SOURCE_MODE* pMatchingSourceMode = NULL;
+                        if (hVidPnSourceModeSet && pVidPnSourceModeSetInterface)
+                        {
+                            const D3DKMDT_VIDPN_SOURCE_MODE* pSourceMode = NULL;
+                            NTSTATUS SourceStatus = pVidPnSourceModeSetInterface->pfnAcquireFirstModeInfo(hVidPnSourceModeSet, &pSourceMode);
+                            while (NT_SUCCESS(SourceStatus) && pSourceMode)
+                            {
+                                if (pSourceMode->Format.Graphics.PrimSurfSize.cx == pVidPnTargetMode->VideoSignalInfo.ActiveSize.cx &&
+                                    pSourceMode->Format.Graphics.PrimSurfSize.cy == pVidPnTargetMode->VideoSignalInfo.ActiveSize.cy)
+                                {
+                                    pMatchingSourceMode = pSourceMode;
+                                    break;
+                                }
+                                SourceStatus = pVidPnSourceModeSetInterface->pfnAcquireNextModeInfo(hVidPnSourceModeSet,
+                                                                                                      pSourceMode,
+                                                                                                      &pSourceMode);
+                            }
+                        }
+
+                        // Add mode to collection
+                        if (CollectedModeCount >= CollectedModeCapacity)
+                        {
+                            ULONG NewCapacity = CollectedModeCapacity == 0 ? 16 : CollectedModeCapacity * 2;
+                            PD3DKMT_DISPLAYMODE NewModes = (PD3DKMT_DISPLAYMODE)ExAllocatePoolWithTag(
+                                NonPagedPool,
+                                NewCapacity * sizeof(D3DKMT_DISPLAYMODE),
+                                'RXGK');
+                            if (!NewModes)
+                            {
+                                Status = STATUS_INSUFFICIENT_RESOURCES;
+                                break;
+                            }
+                            if (CollectedModes)
+                            {
+                                RtlCopyMemory(NewModes, CollectedModes, CollectedModeCount * sizeof(D3DKMT_DISPLAYMODE));
+                                ExFreePoolWithTag(CollectedModes, 'RXGK');
+                            }
+                            CollectedModes = NewModes;
+                            CollectedModeCapacity = NewCapacity;
+                        }
+
+                        if (CollectedModes)
+                        {
+                            D3DKMT_DISPLAYMODE* pMode = &CollectedModes[CollectedModeCount];
+                            RtlZeroMemory(pMode, sizeof(*pMode));
+                            pMode->Width = (UINT)pVidPnTargetMode->VideoSignalInfo.ActiveSize.cx;
+                            pMode->Height = (UINT)pVidPnTargetMode->VideoSignalInfo.ActiveSize.cy;
+                            if (pMatchingSourceMode)
+                            {
+                                pMode->Format = pMatchingSourceMode->Format.Graphics.PixelFormat;
+                            }
+                            else
+                            {
+                                pMode->Format = D3DDDIFMT_A8R8G8B8; // Default
+                            }
+                            pMode->IntegerRefreshRate = (UINT)(pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Numerator / 
+                                                                 pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Denominator);
+                            pMode->RefreshRate.Numerator = pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Numerator;
+                            pMode->RefreshRate.Denominator = pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Denominator;
+                            pMode->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
+                            pMode->DisplayOrientation = D3DDDI_ROTATION_IDENTITY;
+                            pMode->DisplayFixedOutput = 0;
+                            pMode->Flags.ValidatedAgainstMonitorCaps = 1;
+                            CollectedModeCount++;
+                        }
+
                         Status = pVidPnTargetModeSetInterface->pfnAcquireNextModeInfo(hVidPnTargetModeSet,
                                                                                        pVidPnTargetMode,
                                                                                        &pVidPnTargetMode);
@@ -505,6 +577,13 @@ RxgkStartAdapter()
 
                     pVidPnInterface->pfnReleaseTargetModeSet(hConstrainingVidPn, hVidPnTargetModeSet);
                 }
+            }
+            
+            // Release source mode set after we're done with this path
+            if (hVidPnSourceModeSet)
+            {
+                pVidPnInterface->pfnReleaseSourceModeSet(hConstrainingVidPn, hVidPnSourceModeSet);
+                hVidPnSourceModeSet = NULL;
             }
 
             /* Get the next path */
@@ -530,6 +609,19 @@ RxgkStartAdapter()
         /* Release the last path if we have one */
         if (pVidPnPresentPath)
             pVidPnTopologyInterface->pfnReleasePathInfo(hVidPnTopology, pVidPnPresentPath);
+        
+        // Store collected modes in driver extension
+        KIRQL OldIrql;
+        KeAcquireSpinLock(&RxgkDriverExtension->EnumeratedModesLock, &OldIrql);
+        if (RxgkDriverExtension->EnumeratedModes)
+        {
+            ExFreePoolWithTag(RxgkDriverExtension->EnumeratedModes, 'RXGK');
+        }
+        RxgkDriverExtension->EnumeratedModes = CollectedModes;
+        RxgkDriverExtension->EnumeratedModeCount = CollectedModeCount;
+        KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+        
+        DPRINT1("RxgkStartAdapter: Stored %lu enumerated modes\n", CollectedModeCount);
     }
 
     if (hConstrainingVidPn)

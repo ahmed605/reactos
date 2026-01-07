@@ -3,6 +3,7 @@
 //#define NDEBUG
 #include <debug.h>
 #include <d3dkmddi.h>
+#include <reactos/rddm/rxgkinterface.h> // Includes d3dkmthk.h with proper PALETTEENTRY definition
 
 #include "../include/rxgkpostdisplay.h"
 
@@ -396,6 +397,146 @@ RxgkBuildConstrainingVidPn(
     // 1. The VidPN is valid and VBoxWddm can acquire the mode sets
     // 2. VBoxWddm can release them, create new ones, and add all supported modes
     // 3. Since no modes are pinned, VBoxWddm will add all its supported modes
+
+    *phVidPn = hVidPn;
+    return STATUS_SUCCESS;
+
+Fail:
+    RxgkDestroyVidPn(hVidPn);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+RxgkBuildConstrainingVidPnWithMode(
+    _Out_ D3DKMDT_HVIDPN* phVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ const D3DKMT_DISPLAYMODE* pRequestedMode)
+{
+    RXGK_VIDPN_TRACE1("phVidPn=%p SourceId=%lu TargetId=%lu", phVidPn, (ULONG)VidPnSourceId, (ULONG)VidPnTargetId);
+    if (!phVidPn || !pRequestedMode)
+        return STATUS_INVALID_PARAMETER;
+
+    *phVidPn = NULL;
+
+    D3DKMDT_HVIDPN hVidPn = NULL;
+    NTSTATUS Status = RxgkCreateVidPn(&hVidPn);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    // --- Source mode set: create mode set with requested mode pinned ---
+    {
+        D3DKMDT_HVIDPNSOURCEMODESET hSourceSet = NULL;
+        const DXGK_VIDPNSOURCEMODESET_INTERFACE* pSourceIf = NULL;
+        Status = RxgkVidPnCreateNewSourceModeSet(hVidPn, VidPnSourceId, &hSourceSet, &pSourceIf);
+        if (!NT_SUCCESS(Status) || !pSourceIf)
+            goto Fail;
+
+        D3DKMDT_VIDPN_SOURCE_MODE* pNewSourceMode = NULL;
+        Status = pSourceIf->pfnCreateNewModeInfo(hSourceSet, &pNewSourceMode);
+        if (!NT_SUCCESS(Status) || !pNewSourceMode)
+            goto Fail;
+
+        RtlZeroMemory(pNewSourceMode, sizeof(*pNewSourceMode));
+        pNewSourceMode->Type = D3DKMDT_RMT_GRAPHICS;
+        pNewSourceMode->Format.Graphics.PrimSurfSize.cx = pRequestedMode->Width;
+        pNewSourceMode->Format.Graphics.PrimSurfSize.cy = pRequestedMode->Height;
+        pNewSourceMode->Format.Graphics.VisibleRegionSize = pNewSourceMode->Format.Graphics.PrimSurfSize;
+        // Calculate stride from format
+        UINT BytesPerPixel = 4; // Default for A8R8G8B8
+        if (pRequestedMode->Format == D3DDDIFMT_R5G6B5) BytesPerPixel = 2;
+        else if (pRequestedMode->Format == D3DDDIFMT_R8G8B8) BytesPerPixel = 3;
+        pNewSourceMode->Format.Graphics.Stride = pRequestedMode->Width * BytesPerPixel;
+        pNewSourceMode->Format.Graphics.PixelFormat = pRequestedMode->Format;
+        pNewSourceMode->Format.Graphics.ColorBasis = D3DKMDT_CB_SCRGB;
+        pNewSourceMode->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
+
+        Status = pSourceIf->pfnAddMode(hSourceSet, pNewSourceMode);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+
+        // Pin the mode
+        const D3DKMDT_VIDPN_SOURCE_MODE* pFirstSourceMode = NULL;
+        Status = pSourceIf->pfnAcquireFirstModeInfo(hSourceSet, &pFirstSourceMode);
+        if (!NT_SUCCESS(Status) || !pFirstSourceMode)
+            goto Fail;
+
+        Status = pSourceIf->pfnPinMode(hSourceSet, pFirstSourceMode->Id);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+
+        Status = RxgkVidPnAssignSourceModeSet(hVidPn, VidPnSourceId, hSourceSet);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
+    // --- Target mode set: create mode set with requested mode pinned ---
+    {
+        D3DKMDT_HVIDPNTARGETMODESET hTargetSet = NULL;
+        const DXGK_VIDPNTARGETMODESET_INTERFACE* pTargetIf = NULL;
+        Status = RxgkVidPnCreateNewTargetModeSet(hVidPn, VidPnTargetId, &hTargetSet, &pTargetIf);
+        if (!NT_SUCCESS(Status) || !pTargetIf)
+            goto Fail;
+
+        D3DKMDT_VIDPN_TARGET_MODE* pNewTargetMode = NULL;
+        Status = pTargetIf->pfnCreateNewModeInfo(hTargetSet, &pNewTargetMode);
+        if (!NT_SUCCESS(Status) || !pNewTargetMode)
+            goto Fail;
+
+        RtlZeroMemory(pNewTargetMode, sizeof(*pNewTargetMode));
+        pNewTargetMode->VideoSignalInfo.TotalSize.cx = pRequestedMode->Width;
+        pNewTargetMode->VideoSignalInfo.TotalSize.cy = pRequestedMode->Height;
+        pNewTargetMode->VideoSignalInfo.ActiveSize.cx = pRequestedMode->Width;
+        pNewTargetMode->VideoSignalInfo.ActiveSize.cy = pRequestedMode->Height;
+        pNewTargetMode->VideoSignalInfo.VSyncFreq.Numerator = pRequestedMode->RefreshRate.Numerator;
+        pNewTargetMode->VideoSignalInfo.VSyncFreq.Denominator = pRequestedMode->RefreshRate.Denominator;
+        pNewTargetMode->VideoSignalInfo.ScanLineOrdering = pRequestedMode->ScanLineOrdering;
+
+        Status = pTargetIf->pfnAddMode(hTargetSet, pNewTargetMode);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+
+        // Pin the mode
+        const D3DKMDT_VIDPN_TARGET_MODE* pFirstTargetMode = NULL;
+        Status = pTargetIf->pfnAcquireFirstModeInfo(hTargetSet, &pFirstTargetMode);
+        if (!NT_SUCCESS(Status) || !pFirstTargetMode)
+            goto Fail;
+
+        Status = pTargetIf->pfnPinMode(hTargetSet, pFirstTargetMode->Id);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+
+        Status = RxgkVidPnAssignTargetModeSet(hVidPn, VidPnTargetId, hTargetSet);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
+    // --- Topology: one path SourceId -> TargetId ---
+    {
+        D3DKMDT_HVIDPNTOPOLOGY hTopology = NULL;
+        const DXGK_VIDPNTOPOLOGY_INTERFACE* pTopoIf = NULL;
+        Status = RxgkVidPnGetTopology(hVidPn, &hTopology, &pTopoIf);
+        if (!NT_SUCCESS(Status) || !pTopoIf)
+            goto Fail;
+
+        D3DKMDT_VIDPN_PRESENT_PATH* pNewPath = NULL;
+        Status = pTopoIf->pfnCreateNewPathInfo(hTopology, &pNewPath);
+        if (!NT_SUCCESS(Status) || !pNewPath)
+            goto Fail;
+
+        RtlZeroMemory(pNewPath, sizeof(*pNewPath));
+        pNewPath->VidPnSourceId = VidPnSourceId;
+        pNewPath->VidPnTargetId = VidPnTargetId;
+        pNewPath->GammaRamp.Type = D3DDDI_GAMMARAMP_DEFAULT;
+        pNewPath->ContentTransformation.Scaling = D3DKMDT_VPPS_UNINITIALIZED;
+        pNewPath->ContentTransformation.Rotation = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)pRequestedMode->DisplayOrientation;
+        pNewPath->VidPnTargetColorBasis = D3DKMDT_CB_SCRGB;
+
+        Status = pTopoIf->pfnAddPath(hTopology, pNewPath);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
 
     *phVidPn = hVidPn;
     return STATUS_SUCCESS;

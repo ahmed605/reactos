@@ -54,6 +54,16 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
      */
     RxgkDriverExtension->InterruptObject = NULL;
     KeInitializeSpinLock(&RxgkDriverExtension->InterruptSpinLock);
+    
+    // Initialize enumerated modes storage
+    RxgkDriverExtension->EnumeratedModes = NULL;
+    RxgkDriverExtension->EnumeratedModeCount = 0;
+    KeInitializeSpinLock(&RxgkDriverExtension->EnumeratedModesLock);
+    
+    // Initialize desired mode storage
+    RxgkDriverExtension->pDesiredMode = NULL;
+    RxgkDriverExtension->DesiredModeValid = FALSE;
+    KeInitializeSpinLock(&RxgkDriverExtension->DesiredModeLock);
  
     RxgkDriverExtension->Version = DriverInitData->Version;
     RxgkDriverExtension->DxgkDdiAddDevice = DriverInitData->DxgkDdiAddDevice;
