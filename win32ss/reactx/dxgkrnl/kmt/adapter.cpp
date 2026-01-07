@@ -9,6 +9,7 @@
 #include <debug.h>
 
 #include <reactos/rddm/rxgkinterface.h>
+#include <ntstrsafe.h>
 
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 
@@ -131,6 +132,9 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
     D3DKMT_SEGMENTSIZEINFO* SegmentSizeInfo;
     WCHAR* AdapterString = L"VirtualBox Graphics Adapter (WDDM)";
     BOOLEAN Callback = FALSE;
+    PVOID UmDriverPrivate = NULL;
+    UINT UmDriverPrivateSize = 0;
+    PVOID KmDriverPrivate = NULL;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -150,202 +154,208 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
         case KMTQAITYPE_UMDRIVERPRIVATE:
             DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_UMDRIVERPRIVATE\n");
             QueryAdapterInfo.Type = DXGKQAITYPE_UMDRIVERPRIVATE;
-            QueryAdapterInfo.InputDataSize = Args->PrivateDriverDataSize;
-            QueryAdapterInfo.pInputData = Args->pPrivateDriverData;
-            QueryAdapterInfo.pOutputData = Args->pPrivateDriverData;
-            QueryAdapterInfo.OutputDataSize = Args->PrivateDriverDataSize;
+            /*
+             * Vista reference behavior:
+             * - pInputData = NULL; InputDataSize = 0
+             * - pOutputData points to a *kernel* buffer of Size bytes (OutputDataSize = Size)
+             * We must not pass a user pointer directly to the miniport.
+             */
+            QueryAdapterInfo.InputDataSize = 0;
+            QueryAdapterInfo.pInputData = NULL;
+            UmDriverPrivate = Args->pPrivateDriverData;
+            UmDriverPrivateSize = Args->PrivateDriverDataSize;
+            QueryAdapterInfo.pOutputData = NULL; /* filled before callback */
+            QueryAdapterInfo.OutputDataSize = UmDriverPrivateSize;
             Callback = TRUE;
             break;
 
         case KMTQAITYPE_UMDRIVERNAME:
         {
             DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_UMDRIVERNAME\n");
-            // This query type requests the user-mode driver DLL name (e.g., "VBoxDispD3D.dll", "igdumd64.dll")
-            // Query from the adapter's registry key: UserModeDriverName value
-            if (Args->PrivateDriverDataSize > 0 && Args->pPrivateDriverData)
+            /*
+             * Vista/Windows behavior (see ReverseEngineredRefs/winvistsa/dxgkrnl.c):
+             * - The buffer is a D3DKMT_UMDFILENAMEINFO (524 bytes): { Version; WCHAR UmdFileName[MAX_PATH]; }.
+             * - UmdFileName is selected from a REG_MULTI_SZ list stored in UserModeDriverName (or ...Wow),
+             *   indexed by Version (DX9=0 -> first string, DX10=1 -> second string, etc).
+             */
+            if (!Args->pPrivateDriverData)
+                return STATUS_INVALID_PARAMETER;
+
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_UMDFILENAMEINFO))
             {
-#if 0
-                NTSTATUS RegStatus;
-                HANDLE AdapterKeyHandle = NULL;
-                UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"UserModeDriverName");
-                PKEY_VALUE_PARTIAL_INFORMATION KeyInfo = NULL;
-                ULONG KeyInfoSize = 0;
-                ULONG ResultLength = 0;
-                
-                // Try to open the adapter's registry key
-                // For VirtualBox, this would be under the Video\{GUID}\Video key
-                // We can try to use IoOpenDeviceRegistryKey if we have the PDO
-                if (RxgkDriverExtension && RxgkDriverExtension->MiniportPdo)
-                {
-                    RegStatus = IoOpenDeviceRegistryKey(
-                        RxgkDriverExtension->MiniportPdo,
-                        PLUGPLAY_REGKEY_DRIVER,
-                        KEY_READ,
-                        &AdapterKeyHandle);
-                    
-                    if (NT_SUCCESS(RegStatus))
-                    {
-                        // Query the UserModeDriverName value (REG_MULTI_SZ)
-                        // First, get the size
-                        RegStatus = ZwQueryValueKey(
-                            AdapterKeyHandle,
-                            &ValueName,
-                            KeyValuePartialInformation,
-                            NULL,
-                            0,
-                            &ResultLength);
-                        
-                        if (RegStatus == STATUS_BUFFER_TOO_SMALL && ResultLength > 0)
-                        {
-                            KeyInfoSize = ResultLength;
-                            KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(
-                                PagedPool, KeyInfoSize, 'RXGK');
-                            
-                            if (KeyInfo)
-                            {
-                                RegStatus = ZwQueryValueKey(
-                                    AdapterKeyHandle,
-                                    &ValueName,
-                                    KeyValuePartialInformation,
-                                    KeyInfo,
-                                    KeyInfoSize,
-                                    &ResultLength);
-                                
-                                if (NT_SUCCESS(RegStatus) && 
-                                    KeyInfo->Type == REG_MULTI_SZ &&
-                                    KeyInfo->DataLength > 0)
-                                {
-                                    // Copy the first string from REG_MULTI_SZ (can have multiple entries)
-                                    // REG_MULTI_SZ is a sequence of null-terminated strings, terminated by two nulls
-                                    // Access Data as bytes first to ensure proper alignment
-                                    PUCHAR DataBytes = (PUCHAR)KeyInfo->Data;
-                                    PWSTR MultiSzData = (PWSTR)DataBytes;
-                                    SIZE_T MaxLen = Args->PrivateDriverDataSize / sizeof(WCHAR);
-                                    
-                                    // Calculate maximum characters we can safely read
-                                    ULONG MaxChars = (ULONG)(KeyInfo->DataLength / sizeof(WCHAR));
-                                    if (MaxChars > MaxLen)
-                                        MaxChars = (ULONG)MaxLen;
-                                    
-                                    // Find the length of the first string (up to first null terminator)
-                                    SIZE_T NameLen = 0;
-                                    for (ULONG i = 0; i < MaxChars; i++)
-                                    {
-                                        if (MultiSzData[i] == L'\0')
-                                        {
-                                            NameLen = i;
-                                            break;
-                                        }
-                                    }
-                                    
-                                    // If no null found within bounds, use the available space minus 1 for null terminator
-                                    if (NameLen == 0 && MaxChars > 0)
-                                    {
-                                        NameLen = MaxChars - 1;
-                                    }
-                                    
-                                    // Copy the string - use RtlCopyMemory for safe user-mode buffer access
-                                    if (NameLen > 0 && NameLen < MaxLen)
-                                    {
-                                        // Calculate bytes to copy (NameLen WCHARs + null terminator)
-                                        SIZE_T CopyBytes = (NameLen + 1) * sizeof(WCHAR);
-                                        
-                                        // Probe the user-mode buffer before writing
-                                        _SEH2_TRY
-                                        {
-                                            ProbeForWrite(Args->pPrivateDriverData, CopyBytes, sizeof(WCHAR));
-                                            
-                                            // Copy the string using RtlCopyMemory (handles user-mode buffers correctly)
-                                            RtlCopyMemory(Args->pPrivateDriverData, MultiSzData, NameLen * sizeof(WCHAR));
-                                            
-                                            // Ensure null terminator
-                                            ((PWSTR)Args->pPrivateDriverData)[NameLen] = L'\0';
-                                            
-                                            DPRINT1("RxgkWin32kQueryAdapterInfo: Copied '%ls' (NameLen=%Iu, CopyBytes=%Iu, Dest=%p, Src=%p)\n", 
-                                                    (PWSTR)Args->pPrivateDriverData, NameLen, CopyBytes, Args->pPrivateDriverData, MultiSzData);
-                                        }
-                                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                                        {
-                                            DPRINT1("RxgkWin32kQueryAdapterInfo: Exception while writing to user buffer\n");
-                                            ExFreePoolWithTag(KeyInfo, 'RXGK');
-                                            ZwClose(AdapterKeyHandle);
-                                            _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
-                                        }
-                                        _SEH2_END;
-                                    }
-                                    else if (Args->PrivateDriverDataSize >= sizeof(WCHAR))
-                                    {
-                                        // Empty string or invalid - just null terminate
-                                        _SEH2_TRY
-                                        {
-                                            ProbeForWrite(Args->pPrivateDriverData, sizeof(WCHAR), sizeof(WCHAR));
-                                            ((WCHAR*)Args->pPrivateDriverData)[0] = L'\0';
-                                        }
-                                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                                        {
-                                            DPRINT1("RxgkWin32kQueryAdapterInfo: Exception while writing null terminator\n");
-                                            ExFreePoolWithTag(KeyInfo, 'RXGK');
-                                            ZwClose(AdapterKeyHandle);
-                                            _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
-                                        }
-                                        _SEH2_END;
-                                    }
-                                    
-                                    DPRINT1("RxgkWin32kQueryAdapterInfo: Found UserModeDriverName='%ls' (len=%Iu, DataLength=%u, MaxLen=%Iu)\n", 
-                                            (PWSTR)Args->pPrivateDriverData, NameLen, KeyInfo->DataLength, MaxLen);
-                                    
-                                    ExFreePoolWithTag(KeyInfo, 'RXGK');
-                                    ZwClose(AdapterKeyHandle);
-                                    return STATUS_SUCCESS;
-                                }
-                                
-                                ExFreePoolWithTag(KeyInfo, 'RXGK');
-                            }
-                        }
-                        
-                        ZwClose(AdapterKeyHandle);
-                    }
-                }
-#endif // #if 0 - Registry query code disabled for testing
-                
-                // Based on reference code analysis:
-                // - Buffer size is 524 bytes (260 WCHARs)
-                // - First DWORD (4 bytes) is a count field (0 for single string)
-                // - String is written at offset +4 bytes (2 WCHARs) from buffer start
-                // - Max string length is 260 WCHARs (520 bytes)
-                WCHAR* FallbackDriverName = L"VBoxDispD3D.dll";
-                SIZE_T NameLen = wcslen(FallbackDriverName);
-                SIZE_T MaxStringChars = (Args->PrivateDriverDataSize - 4) / sizeof(WCHAR); // Reserve 4 bytes for count DWORD
-                
-                if (NameLen >= MaxStringChars)
-                    NameLen = MaxStringChars - 1;
-                
-                // Probe and copy with SEH protection
-                _SEH2_TRY
-                {
-                    ProbeForWrite(Args->pPrivateDriverData, Args->PrivateDriverDataSize, 1);
-                    
-                    // Zero the buffer first
-                    RtlZeroMemory(Args->pPrivateDriverData, Args->PrivateDriverDataSize);
-                    
-                    // Set first DWORD to 0 (count for single string case, per reference code line 75228)
-                    *(PULONG)Args->pPrivateDriverData = 0;
-                    
-                    // Write string at offset +4 bytes (2 WCHARs), matching reference code line 75240: v35 = v27 + 4
-                    PWSTR StringDest = (PWSTR)((PUCHAR)Args->pPrivateDriverData + 4);
-                    RtlCopyMemory(StringDest, FallbackDriverName, NameLen * sizeof(WCHAR));
-                    StringDest[NameLen] = L'\0';
-                    
-                    DPRINT1("RxgkWin32kQueryAdapterInfo: Using hardcoded UserModeDriverName='%ls' (NameLen=%Iu, written at offset +4)\n", 
-                            StringDest, NameLen);
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    DPRINT1("RxgkWin32kQueryAdapterInfo: Exception while writing hardcoded name to user buffer\n");
-                    _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
-                }
-                _SEH2_END;
+                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERNAME invalid buffer size %u (expected %Iu)\n",
+                        (UINT)Args->PrivateDriverDataSize, sizeof(D3DKMT_UMDFILENAMEINFO));
+                return STATUS_INVALID_PARAMETER;
             }
+
+            NTSTATUS RegStatus;
+            HANDLE KeyHandle = NULL;
+            PKEY_VALUE_PARTIAL_INFORMATION Kvpi = NULL;
+            ULONG ResultLength = 0;
+            UNICODE_STRING ValueName;
+            D3DKMT_UMDFILENAMEINFO LocalInfo;
+            BOOLEAN Wow64 = FALSE;
+
+            /* IoIs32bitProcess() is currently UNIMPLEMENTED in our kernel; avoid calling it. */
+            Wow64 = FALSE;
+            RtlInitUnicodeString(&ValueName, Wow64 ? L"UserModeDriverNameWow" : L"UserModeDriverName");
+
+            /* Read the input version first (may be user-mode memory). */
+            _SEH2_TRY
+            {
+                ProbeForRead(Args->pPrivateDriverData, sizeof(D3DKMT_UMDFILENAMEINFO), sizeof(ULONG));
+                RtlCopyMemory(&LocalInfo, Args->pPrivateDriverData, sizeof(D3DKMT_UMDFILENAMEINFO));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            if (!RxgkDriverExtension || !RxgkDriverExtension->MiniportPdo)
+            {
+                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERNAME no MiniportPdo; cannot query driver registry yet\n");
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            /* Open the miniport driver's software key (where INF HKR values land). */
+            RegStatus = IoOpenDeviceRegistryKey(RxgkDriverExtension->MiniportPdo,
+                                                PLUGPLAY_REGKEY_DRIVER,
+                                                KEY_READ,
+                                                &KeyHandle);
+            if (!NT_SUCCESS(RegStatus))
+            {
+                DPRINT1("RxgkWin32kQueryAdapterInfo: IoOpenDeviceRegistryKey failed 0x%08X\n", RegStatus);
+                return RegStatus;
+            }
+
+            /* Query value size */
+            RegStatus = ZwQueryValueKey(KeyHandle,
+                                        &ValueName,
+                                        KeyValuePartialInformation,
+                                        NULL,
+                                        0,
+                                        &ResultLength);
+            if (RegStatus != STATUS_BUFFER_TOO_SMALL && RegStatus != STATUS_BUFFER_OVERFLOW)
+            {
+                /* If WOW key missing, fall back to non-WOW name. */
+                if (Wow64 && RegStatus == STATUS_OBJECT_NAME_NOT_FOUND)
+                {
+                    RtlInitUnicodeString(&ValueName, L"UserModeDriverName");
+                    RegStatus = ZwQueryValueKey(KeyHandle,
+                                                &ValueName,
+                                                KeyValuePartialInformation,
+                                                NULL,
+                                                0,
+                                                &ResultLength);
+                }
+            }
+
+            if (RegStatus != STATUS_BUFFER_TOO_SMALL && RegStatus != STATUS_BUFFER_OVERFLOW)
+            {
+                DPRINT1("RxgkWin32kQueryAdapterInfo: ZwQueryValueKey(size) failed 0x%08X\n", RegStatus);
+                ZwClose(KeyHandle);
+                return RegStatus;
+            }
+
+            Kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(PagedPool, ResultLength, 'gkxR');
+            if (!Kvpi)
+            {
+                ZwClose(KeyHandle);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            RegStatus = ZwQueryValueKey(KeyHandle,
+                                        &ValueName,
+                                        KeyValuePartialInformation,
+                                        Kvpi,
+                                        ResultLength,
+                                        &ResultLength);
+            ZwClose(KeyHandle);
+            if (!NT_SUCCESS(RegStatus))
+            {
+                ExFreePoolWithTag(Kvpi, 'gkxR');
+                return RegStatus;
+            }
+
+            /* Parse either REG_MULTI_SZ or REG_SZ. */
+            if ((Kvpi->Type != REG_MULTI_SZ && Kvpi->Type != REG_SZ) || Kvpi->DataLength < sizeof(WCHAR))
+            {
+                ExFreePoolWithTag(Kvpi, 'gkxR');
+                return STATUS_OBJECT_TYPE_MISMATCH;
+            }
+
+            const WCHAR *multi = (const WCHAR *)Kvpi->Data;
+            ULONG multi_cch = Kvpi->DataLength / sizeof(WCHAR);
+            ULONG wanted_index = (ULONG)LocalInfo.Version;
+            ULONG cur_index = 0;
+            ULONG off = 0;
+            const WCHAR *chosen = NULL;
+            SIZE_T chosen_cch = 0;
+
+            if (Kvpi->Type == REG_SZ)
+            {
+                chosen = multi;
+                /* REG_SZ may include trailing NUL; clamp. */
+                while (chosen_cch < multi_cch && chosen[chosen_cch] != L'\0')
+                    chosen_cch++;
+            }
+            else
+            {
+                /* REG_MULTI_SZ: choose string by index == Version. */
+                while (off < multi_cch)
+                {
+                    const WCHAR *s = &multi[off];
+                    SIZE_T len = 0;
+                    while ((off + len) < multi_cch && s[len] != L'\0')
+                        len++;
+
+                    if (len == 0)
+                        break; /* end of MULTI_SZ (double NUL) */
+
+                    if (cur_index == wanted_index)
+                    {
+                        chosen = s;
+                        chosen_cch = len;
+                        break;
+                    }
+
+                    cur_index++;
+                    off += (ULONG)len + 1; /* skip NUL */
+                }
+            }
+
+            if (!chosen || chosen_cch == 0)
+            {
+                ExFreePoolWithTag(Kvpi, 'gkxR');
+                return STATUS_OBJECT_NAME_NOT_FOUND;
+            }
+
+            /* Write back to caller: keep Version, fill UmdFileName. */
+            _SEH2_TRY
+            {
+                ProbeForWrite(Args->pPrivateDriverData, sizeof(D3DKMT_UMDFILENAMEINFO), sizeof(ULONG));
+                D3DKMT_UMDFILENAMEINFO *Out = (D3DKMT_UMDFILENAMEINFO *)Args->pPrivateDriverData;
+                /* Preserve Version from the caller input. */
+                Out->Version = LocalInfo.Version;
+                Out->UmdFileName[0] = L'\0';
+                /* Ensure NUL termination and clamp to MAX_PATH. */
+                SIZE_T copy_cch = chosen_cch;
+                if (copy_cch >= MAX_PATH)
+                    copy_cch = MAX_PATH - 1;
+                RtlCopyMemory(Out->UmdFileName, chosen, copy_cch * sizeof(WCHAR));
+                Out->UmdFileName[copy_cch] = L'\0';
+                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERNAME Version=%u -> '%ls'%s\n",
+                        (UINT)Out->Version, Out->UmdFileName, Wow64 ? " (Wow64)" : "");
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ExFreePoolWithTag(Kvpi, 'gkxR');
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            ExFreePoolWithTag(Kvpi, 'gkxR');
             return STATUS_SUCCESS;
         }
 
@@ -577,22 +587,16 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
             SegmentInfo.AgpApertureSize.QuadPart = 0;
             SegmentInfo.AgpFlags.Value = 0;
 
-            // Allocate buffer for segment descriptors
-            // We need space for at least a few segments
-            ULONG SegmentBufferSize = sizeof(DXGK_SEGMENTDESCRIPTOR) * 4;
-            pSegmentDescriptors = (PDXGK_SEGMENTDESCRIPTOR)ExAllocatePoolWithTag(
-                NonPagedPool, SegmentBufferSize, 'RXGK');
-            
-            if (!pSegmentDescriptors)
-            {
-                DPRINT1("RxgkWin32kQueryAdapterInfo: Failed to allocate segment descriptor buffer\n");
-                return STATUS_INSUFFICIENT_RESOURCES;
-            }
-
-            RtlZeroMemory(pSegmentDescriptors, SegmentBufferSize);
+            /*
+             * WDDM miniports (including VBox) expect a two-step query:
+             *  1) pSegmentDescriptor == NULL -> returns NbSegment
+             *  2) allocate exactly NbSegment descriptors and call again
+             *
+             * VBox rejects unexpected NbSegment values (it uses exactly 2).
+             */
             RtlZeroMemory(&SegmentOut, sizeof(SegmentOut));
-            SegmentOut.NbSegment = 4;
-            SegmentOut.pSegmentDescriptor = pSegmentDescriptors;
+            SegmentOut.NbSegment = 0;
+            SegmentOut.pSegmentDescriptor = NULL;
 
             QueryAdapterInfo.Type = DXGKQAITYPE_QUERYSEGMENT;
             QueryAdapterInfo.InputDataSize = sizeof(SegmentInfo);
@@ -601,7 +605,7 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
             QueryAdapterInfo.OutputDataSize = sizeof(DXGK_QUERYSEGMENTOUT);
             Callback = TRUE;
             
-            // Note: SegmentOut.pSegmentDescriptor will be freed after the callback
+            // Note: SegmentOut.pSegmentDescriptor will be allocated after the first callback.
             break;
         }
 
@@ -748,6 +752,30 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
 
     if (Callback && RxgkDriverExtension->DxgkDdiQueryAdapterInfo)
     {
+        /* Special-case UMDRIVERPRIVATE: allocate kernel buffer and copy back to user. */
+        if (Args->Type == KMTQAITYPE_UMDRIVERPRIVATE)
+        {
+            if (!UmDriverPrivate || UmDriverPrivateSize == 0)
+                return STATUS_INVALID_PARAMETER;
+
+            _SEH2_TRY
+            {
+                ProbeForWrite(UmDriverPrivate, UmDriverPrivateSize, 1);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            KmDriverPrivate = ExAllocatePoolWithTag(PagedPool, UmDriverPrivateSize, 'pDxR');
+            if (!KmDriverPrivate)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
+            RtlZeroMemory(KmDriverPrivate, UmDriverPrivateSize);
+            QueryAdapterInfo.pOutputData = KmDriverPrivate;
+        }
+
         Status = RxgkDriverExtension->DxgkDdiQueryAdapterInfo(
             RxgkDriverExtension->MiniportContext,
             &QueryAdapterInfo);
@@ -755,6 +783,12 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("RxgkWin32kQueryAdapterInfo: DxgkDdiQueryAdapterInfo failed 0x%08X\n", Status);
+
+            if (KmDriverPrivate)
+            {
+                ExFreePoolWithTag(KmDriverPrivate, 'pDxR');
+                KmDriverPrivate = NULL;
+            }
             
             // Free segment buffer if allocated
             if (Args->Type == KMTQAITYPE_GETSEGMENTSIZE && pSegmentDescriptors)
@@ -770,12 +804,85 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
                 RtlZeroMemory(SegmentSizeInfo, sizeof(D3DKMT_SEGMENTSIZEINFO));
                 SegmentSizeInfo->DedicatedVideoMemorySize = 0;
                 SegmentSizeInfo->DedicatedSystemMemorySize = 0;
-                SegmentSizeInfo->SharedSystemMemorySize = 64 * 1024 * 1024; // 64 MB default
+                SegmentSizeInfo->SharedSystemMemorySize = 256 * 1024 * 1024; // 64 MB default
                 Status = STATUS_SUCCESS;
             }
         }
+        else if (Args->Type == KMTQAITYPE_UMDRIVERPRIVATE && KmDriverPrivate)
+        {
+            /* Copy kernel buffer back to user buffer. */
+            _SEH2_TRY
+            {
+                RtlCopyMemory(UmDriverPrivate, KmDriverPrivate, UmDriverPrivateSize);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ExFreePoolWithTag(KmDriverPrivate, 'pDxR');
+                KmDriverPrivate = NULL;
+                _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+            }
+            _SEH2_END;
+
+            /*
+             * Best-effort debug: VBox fills VBOXWDDM_QAI starting with:
+             *   u32Version, enmHwType, u32AdapterCaps, ...
+             * Print these to confirm whether 3D is enabled (CAP_3D).
+             */
+            if (UmDriverPrivateSize >= sizeof(ULONG) * 3)
+            {
+                const ULONG *dw = (const ULONG *)KmDriverPrivate;
+                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE hdr: u32Version=%lu enmHwType=%lu u32AdapterCaps=0x%08lX\n",
+                        dw[0], dw[1], dw[2]);
+            }
+
+            ExFreePoolWithTag(KmDriverPrivate, 'pDxR');
+            KmDriverPrivate = NULL;
+            DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE returned %u bytes\n", UmDriverPrivateSize);
+        }
         else if (Args->Type == KMTQAITYPE_GETSEGMENTSIZE)
         {
+            /* If first pass returned only a count, allocate and query again. */
+            if (!SegmentOut.pSegmentDescriptor)
+            {
+                if (SegmentOut.NbSegment == 0 || SegmentOut.NbSegment > 32)
+                {
+                    DPRINT1("RxgkWin32kQueryAdapterInfo: QUERYSEGMENT returned invalid NbSegment=%u\n",
+                            SegmentOut.NbSegment);
+                    SegmentSizeInfo = (D3DKMT_SEGMENTSIZEINFO*)Args->pPrivateDriverData;
+                    RtlZeroMemory(SegmentSizeInfo, sizeof(D3DKMT_SEGMENTSIZEINFO));
+                    SegmentSizeInfo->DedicatedVideoMemorySize = 0;
+                    SegmentSizeInfo->DedicatedSystemMemorySize = 0;
+                    SegmentSizeInfo->SharedSystemMemorySize = 64 * 1024 * 1024;
+                    return STATUS_SUCCESS;
+                }
+
+                ULONG SegmentBufferSize = sizeof(DXGK_SEGMENTDESCRIPTOR) * SegmentOut.NbSegment;
+                pSegmentDescriptors = (PDXGK_SEGMENTDESCRIPTOR)ExAllocatePoolWithTag(
+                    NonPagedPool, SegmentBufferSize, 'RXGK');
+                if (!pSegmentDescriptors)
+                    return STATUS_INSUFFICIENT_RESOURCES;
+
+                RtlZeroMemory(pSegmentDescriptors, SegmentBufferSize);
+                SegmentOut.pSegmentDescriptor = pSegmentDescriptors;
+
+                Status = RxgkDriverExtension->DxgkDdiQueryAdapterInfo(
+                    RxgkDriverExtension->MiniportContext,
+                    &QueryAdapterInfo);
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("RxgkWin32kQueryAdapterInfo: DxgkDdiQueryAdapterInfo(QUERYSEGMENT2) failed 0x%08X\n", Status);
+                    ExFreePoolWithTag(pSegmentDescriptors, 'RXGK');
+                    pSegmentDescriptors = NULL;
+
+                    SegmentSizeInfo = (D3DKMT_SEGMENTSIZEINFO*)Args->pPrivateDriverData;
+                    RtlZeroMemory(SegmentSizeInfo, sizeof(D3DKMT_SEGMENTSIZEINFO));
+                    SegmentSizeInfo->DedicatedVideoMemorySize = 0;
+                    SegmentSizeInfo->DedicatedSystemMemorySize = 0;
+                    SegmentSizeInfo->SharedSystemMemorySize = 64 * 1024 * 1024;
+                    return STATUS_SUCCESS;
+                }
+            }
+
             // Convert DXGK_QUERYSEGMENTOUT to D3DKMT_SEGMENTSIZEINFO
             SegmentSizeInfo = (D3DKMT_SEGMENTSIZEINFO*)Args->pPrivateDriverData;
             RtlZeroMemory(SegmentSizeInfo, sizeof(D3DKMT_SEGMENTSIZEINFO));
@@ -787,7 +894,7 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
 
             if (SegmentOut.pSegmentDescriptor && SegmentOut.NbSegment > 0)
             {
-                for (UINT i = 0; i < SegmentOut.NbSegment && i < 4; i++)
+                for (UINT i = 0; i < SegmentOut.NbSegment; i++)
                 {
                     PDXGK_SEGMENTDESCRIPTOR pSeg = &SegmentOut.pSegmentDescriptor[i];
                     
@@ -841,6 +948,12 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
     {
         DPRINT1("RxgkWin32kQueryAdapterInfo: DxgkDdiQueryAdapterInfo not available\n");
         
+        if (KmDriverPrivate)
+        {
+            ExFreePoolWithTag(KmDriverPrivate, 'pDxR');
+            KmDriverPrivate = NULL;
+        }
+
         // Free segment buffer if allocated
         if (pSegmentDescriptors)
         {

@@ -51,6 +51,12 @@ RxgkWin32kCloseAdapter(_In_ const D3DKMT_CLOSEADAPTER* Args);
 NTSTATUS
 NTAPI
 RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args);
+NTSTATUS
+NTAPI
+RxgkWin32kCreateContext(_Inout_ const D3DKMT_CREATECONTEXT* Args);
+NTSTATUS
+NTAPI
+RxgkWin32kDestroyContext(_In_ const D3DKMT_DESTROYCONTEXT* Args);
 
 NTSTATUS
 NTAPI
@@ -173,7 +179,9 @@ RxgkInternalDeviceControl(
                 Callbacks->RxgkIntPfnCreateAllocation = RxgkWin32kCreateAllocation;
                 Callbacks->RxgkIntPfnQueryAdapterInfo = RxgkWin32kQueryAdapterInfo;
                 Callbacks->RxgkIntPfnCloseAdapter = RxgkWin32kCloseAdapter;
-                Callbacks->RxgkIntPfnCreateDevice = (PDXGADAPTER_CREATEDEVICE)RxgkWin32kCreateDevice;
+                Callbacks->RxgkIntPfnCreateContext = RxgkWin32kCreateContext;
+                Callbacks->RxgkIntPfnCreateDevice = RxgkWin32kCreateDevice;
+                Callbacks->RxgkIntPfnDestroyContext = RxgkWin32kDestroyContext;
                 Callbacks->RxgkIntPfnEscape = RxgkWin32kEscape;
                 Callbacks->RxgkIntPfnGetDeviceState = RxgkWin32kGetDeviceState;
                 Callbacks->RxgkIntPfnQueryResourceInfo = RxgkWin32kQueryResourceInfo;

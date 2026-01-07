@@ -487,6 +487,10 @@ IntCreateNewRegistryPath(
     USHORT KeyMaxLength;
     OBJECT_ATTRIBUTES ObjectAttributes;
     PWCHAR InstanceIdBuffer;
+    UNICODE_STRING VideoKeyPath;
+    UNICODE_STRING ServiceValueName;
+    UNICODE_STRING ServiceName;
+    PWSTR lastSlash;
 
     if (!DeviceExtension->MiniportPdo)
     {
@@ -658,6 +662,61 @@ IntCreateNewRegistryPath(
         /* Close the key handles */
         ObCloseHandle(SettingsKey, KernelMode);
         ObCloseHandle(NewKey, KernelMode);
+    }
+
+    /*
+     * ReactOS win32ss\gdi\eng\device.c expects a sibling key named "\Video"
+     * under "\Control\Video\{GUID}\" and reads its "Service" value to decide
+     * whether the adapter is VGA-only.
+     *
+     * Ensure "\Control\Video\{GUID}\Video" exists and contains Service=<miniport service>.
+     */
+    RtlInitUnicodeString(&ServiceValueName, L"Service");
+
+    /* Derive service name from the miniport registry path: ...\Services\<Name> */
+    ServiceName = DeviceExtension->RegistryPath;
+    lastSlash = wcsrchr(ServiceName.Buffer, L'\\');
+    if (lastSlash && (lastSlash + 1) < (ServiceName.Buffer + (ServiceName.Length / sizeof(WCHAR))))
+    {
+        ServiceName.Buffer = lastSlash + 1;
+        ServiceName.Length = (USHORT)((DeviceExtension->RegistryPath.Buffer +
+                                      (DeviceExtension->RegistryPath.Length / sizeof(WCHAR)) -
+                                      ServiceName.Buffer) * sizeof(WCHAR));
+        ServiceName.MaximumLength = ServiceName.Length;
+    }
+
+    /* Build "\Control\Video\{GUID}\Video" path in a temporary buffer. */
+    VideoKeyPath.MaximumLength = (USHORT)(ControlVideoPathName.Length + VideoIdString.Length + sizeof(L"\\Video"));
+    VideoKeyPath.Length = 0;
+    VideoKeyPath.Buffer = (PWSTR)ExAllocatePoolWithTag(PagedPool, VideoKeyPath.MaximumLength, TAG_VIDEO_PORT);
+    if (VideoKeyPath.Buffer)
+    {
+        RtlCopyUnicodeString(&VideoKeyPath, &ControlVideoPathName);
+        RtlAppendUnicodeStringToString(&VideoKeyPath, &VideoIdString);
+        RtlAppendUnicodeToString(&VideoKeyPath, L"\\Video");
+
+        /* Create/open the key and write Service. */
+        Status = RtlCreateRegistryKey(RTL_REGISTRY_ABSOLUTE, VideoKeyPath.Buffer);
+        if (NT_SUCCESS(Status))
+        {
+            Status = RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                                           VideoKeyPath.Buffer,
+                                           ServiceValueName.Buffer,
+                                           REG_SZ,
+                                           ServiceName.Buffer,
+                                           ServiceName.Length + sizeof(UNICODE_NULL));
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("IntCreateNewRegistryPath: failed to write Service for %wZ: 0x%lx\n",
+                        &VideoKeyPath, Status);
+            }
+        }
+        else
+        {
+            DPRINT1("IntCreateNewRegistryPath: failed to create %wZ: 0x%lx\n", &VideoKeyPath, Status);
+        }
+
+        ExFreePoolWithTag(VideoKeyPath.Buffer, TAG_VIDEO_PORT);
     }
 
     return Status;

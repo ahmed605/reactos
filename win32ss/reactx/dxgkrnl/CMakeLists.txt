@@ -18,6 +18,7 @@ list(APPEND SOURCE
      kmt/d3dkmt_test.cpp
      kmt/allocation.cpp
      kmt/adapter.cpp
+     kmt/context.cpp
      kmt/device.cpp
      kmt/devicestate.cpp
      kmt/escape.cpp

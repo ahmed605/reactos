@@ -161,6 +161,8 @@ NTAPI
 RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* Args)
 {
     DXGK_DISPLAY_INFORMATION DispInfo;
+    NTSTATUS Status;
+    D3DKMT_HANDLE Shared = 0;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -174,8 +176,16 @@ RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* Args)
     if (DispInfo.Width == 0 || DispInfo.Height == 0 || DispInfo.Pitch == 0)
         return STATUS_SUCCESS;
 
-    /* Bring-up: shared primary is a synthetic handle (1). */
-    Args->hSharedPrimary = 1;
+    /*
+     * Vista ddraw.dll expects a valid shared-primary global handle and will then
+     * call QueryResourceInfo/OpenResource. Ensure we have standard allocation
+     * private driver data cached so OpenResource can hand it back to usermode.
+     */
+    Status = RxgkSharedPrimaryEnsure(Args->hAdapter, Args->VidPnSourceId, &Shared);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Args->hSharedPrimary = Shared;
     return STATUS_SUCCESS;
 }
 

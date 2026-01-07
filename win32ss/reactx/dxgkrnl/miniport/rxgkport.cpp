@@ -83,6 +83,10 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
     RxgkDriverExtension->DxgkDdiQueryAdapterInfo = DriverInitData->DxgkDdiQueryAdapterInfo;
     RxgkDriverExtension->DxgkDdiCreateDevice = DriverInitData->DxgkDdiCreateDevice;
     RxgkDriverExtension->DxgkDdiCreateAllocation = DriverInitData->DxgkDdiCreateAllocation;
+    RxgkDriverExtension->DxgkDdiGetStandardAllocationDriverData =
+        (PRXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA)DriverInitData->DxgkDdiGetStandardAllocationDriverData;
+    RxgkDriverExtension->DxgkDdiCreateContext = (PRXGKDDI_CREATECONTEXT)DriverInitData->DxgkDdiCreateContext;
+    RxgkDriverExtension->DxgkDdiDestroyContext = (PRXGKDDI_DESTROYCONTEXT)DriverInitData->DxgkDdiDestroyContext;
 
     /* Persist the miniport's registry path for later registry / resource setup */
     RtlZeroMemory(&RxgkDriverExtension->RegistryPath, sizeof(RxgkDriverExtension->RegistryPath));

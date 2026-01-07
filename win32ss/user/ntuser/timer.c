@@ -58,6 +58,9 @@ CreateTimer(VOID)
   HANDLE Handle;
   PTIMER Ret = NULL;
 
+  /* Must hold the timer list lock while inserting into TimersListHead. */
+  ASSERT(ExIsResourceAcquiredExclusiveLite(&TimerLock));
+
   Ret = UserCreateObject(gHandleTable, NULL, NULL, &Handle, TYPE_TIMER, sizeof(TIMER));
   if (Ret)
   {
@@ -190,6 +193,7 @@ IntSetTimer( PWND Window,
   ULONG ulBitmapIndex;
   LARGE_INTEGER DueTime;
   DueTime.QuadPart = (LONGLONG)(-97656); // 1024hz .9765625 ms set to 10.0 ms
+  PLIST_ENTRY pLE;
 
 #if 0
   /* Windows NT/2k/XP behaviour */
@@ -219,7 +223,29 @@ IntSetTimer( PWND Window,
   if ((Window) && (IDEvent == 0))
      Ret = 1;
 
-  pTmr = FindTimer(Window, IDEvent, Type);
+  /*
+   * NOTE: This function must serialize against ProcessTimers() and PostTimerMessages().
+   * Those routines walk TimersListHead under TimerLock, but historically IntSetTimer()
+   * created/inserted timers without holding TimerLock, which can corrupt the list and
+   * crash in ProcessTimers().
+   */
+  TimerEnterExclusive();
+
+  /* Find existing timer under lock (avoid calling FindTimer() which takes the lock). */
+  pTmr = NULL;
+  pLE = TimersListHead.Flink;
+  while (pLE != &TimersListHead)
+  {
+      PTIMER cur = CONTAINING_RECORD(pLE, TIMER, ptmrList);
+      if (cur->nID == IDEvent &&
+          cur->pWnd == Window &&
+          (cur->flags & (TMRF_SYSTEM|TMRF_RIT)) == (Type & (TMRF_SYSTEM|TMRF_RIT)))
+      {
+          pTmr = cur;
+          break;
+      }
+      pLE = pLE->Flink;
+  }
 
   if ((!pTmr) && (Window == NULL) && (!(Type & TMRF_SYSTEM)))
   {
@@ -232,6 +258,7 @@ IntSetTimer( PWND Window,
          IntUnlockWindowlessTimerBitmap();
          ERR("Unable to find a free window-less timer id\n");
          EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
+         TimerLeave();
          return 0;
       }
 
@@ -245,7 +272,11 @@ IntSetTimer( PWND Window,
   if (!pTmr)
   {
      pTmr = CreateTimer();
-     if (!pTmr) return 0;
+     if (!pTmr)
+     {
+        TimerLeave();
+        return 0;
+     }
 
      if (Window && (Type & TMRF_TIFROMWND))
         pTmr->pti = Window->head.pti->pEThread->Tcb.Win32Thread;
@@ -275,6 +306,7 @@ IntSetTimer( PWND Window,
   if (TimersListHead.Flink == TimersListHead.Blink) // There is only one timer
      KeSetTimer(MasterTimer, DueTime, NULL);
 
+  TimerLeave();
   return Ret;
 }
 

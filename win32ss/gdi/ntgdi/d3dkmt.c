@@ -275,14 +275,24 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateContext(_Inout_ D3DKMT_CREATECONTEXT* unnamedParam1)
 {
+    NTSTATUS Status;
     DPRINT1("D3DKmtCreateContext: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+    {
+        DPRINT1("D3DKmtCreateContext: Invalid parameter\n");
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (!DxgAdapterCallbacks.RxgkIntPfnCreateContext)
+    {
+        DPRINT1("D3DKmtCreateContext: Callback not registered!\n");
         return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
-    return DxgAdapterCallbacks.RxgkIntPfnCreateContext(unnamedParam1);
+    Status = DxgAdapterCallbacks.RxgkIntPfnCreateContext(unnamedParam1);
+    DPRINT1("D3DKmtCreateContext: Status=0x%08X hContext=%p\n",
+            Status, (PVOID)(ULONG_PTR)(unnamedParam1 ? unnamedParam1->hContext : 0));
+    return Status;
 }
 
 NTSTATUS
