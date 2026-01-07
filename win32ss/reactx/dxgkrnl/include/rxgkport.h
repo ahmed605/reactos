@@ -79,6 +79,13 @@ RxgkpSetupDxgkrnl(
     IN PDRIVER_OBJECT DriverObject,
     IN PUNICODE_STRING RegistryPath);
 
+NTSTATUS
+NTAPI
+IntDuplicateUnicodeString(
+    IN ULONG Flags,
+    IN PCUNICODE_STRING SourceString,
+    OUT PUNICODE_STRING DestinationString);
+
 CODE_SEG("PAGE")
 NTSTATUS
 RxgkpQueryInterface(

@@ -68,6 +68,19 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
     RxgkDriverExtension->DxgkDdiCreateDevice = DriverInitData->DxgkDdiCreateDevice;
     RxgkDriverExtension->DxgkDdiCreateAllocation = DriverInitData->DxgkDdiCreateAllocation;
 
+    /* Persist the miniport's registry path for later registry / resource setup */
+    RtlZeroMemory(&RxgkDriverExtension->RegistryPath, sizeof(RxgkDriverExtension->RegistryPath));
+    RtlZeroMemory(&RxgkDriverExtension->NewRegistryPath, sizeof(RxgkDriverExtension->NewRegistryPath));
+
+    Status = IntDuplicateUnicodeString(RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE,
+                                       SourceString,
+                                       &RxgkDriverExtension->RegistryPath);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkPortInitializeMiniport: Failed to copy RegistryPath, status 0x%08X\n", Status);
+        return Status;
+    }
+
     DPRINT1("RDDM: WDDM Miniport driver reports a version of %X\n", RxgkDriverExtension->Version);
     PDRIVER_EXTENSION DriverExtend;
 

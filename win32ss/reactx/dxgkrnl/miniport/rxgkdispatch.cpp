@@ -337,11 +337,33 @@ RxgkPortAddDevice(_In_    DRIVER_OBJECT *DriverObject,
         return STATUS_INVALID_PARAMETER;
     }
 
+    /*
+     * Mirror videoprt: establish per-adapter registry paths and DEVICEMAP
+     * links before the miniport's AddDevice callback runs, so that the
+     * miniport can successfully query its settings.
+     */
+    RxgkDriverExtension->MiniportPdo = PhysicalDeviceObject;
+
+    Status = IntCreateNewRegistryPath(RxgkDriverExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkPortAddDevice: IntCreateNewRegistryPath() pre-AddDevice failed with status 0x%08x\n", Status);
+        /* Not fatal for now; continue and let the miniport decide. */
+    }
+
+    Status = IntVideoPortAddDeviceMapLink(RxgkDriverExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkPortAddDevice: IntVideoPortAddDeviceMapLink() pre-AddDevice failed with status 0x%08x\n", Status);
+        /* Also treated as non-fatal to match videoprt's robustness. */
+    }
+
     /* Call the miniport Routine */
     Status = RxgkDriverExtension->DxgkDdiAddDevice(PhysicalDeviceObject, (PVOID*)&Context);
     if(Status != STATUS_SUCCESS)
     {
         DPRINT1("DxgkPortAddDevice: AddDevice Miniport call failed with status %X\n", Status);
+        __debugbreak();
         return Status;
     }
     else{
@@ -366,7 +388,6 @@ RxgkPortAddDevice(_In_    DRIVER_OBJECT *DriverObject,
     }
 
     RxgkDriverExtension->MiniportFdo = Fdo;
-    RxgkDriverExtension->MiniportPdo = PhysicalDeviceObject;
 
     /* Figure our bus*/
     Size = sizeof(ULONG);
@@ -412,21 +433,6 @@ RxgkPortAddDevice(_In_    DRIVER_OBJECT *DriverObject,
 
     /* match the path videoprt uses. */
     DPRINT("RxgkPortAddDevice: Driver attach success\n");
-    Status = IntCreateNewRegistryPath(RxgkDriverExtension);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("IntCreateNewRegistryPath() failed with status 0x%08x\n", Status);
-       // return Status;
-    }
-
-    /* Set up the VIDEO/DEVICEMAP registry keys */
-    DPRINT("RxgkPortAddDevice: registry setup path success\n");
-    Status = IntVideoPortAddDeviceMapLink(RxgkDriverExtension);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("IntVideoPortAddDeviceMapLink() failed with status 0x%08x\n", Status);
-      //  return Status;
-    }
     InbvNotifyDisplayOwnershipLost(NULL);
     DPRINT1("RxgkPortAddDevice: Device Creation sucessful \n");
 
@@ -464,9 +470,46 @@ NTAPI
 RxgkPortDispatchPnp(_In_ PDEVICE_OBJECT DeviceObject,
                     _In_ PVOID Tag)
 {
-    UNIMPLEMENTED;
-    //__debugbreak();
-    return 0;
+    PIRP Irp;
+    PIO_STACK_LOCATION IrpSp;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    /*
+     * NOTE:
+     * The dispatch prototype in the header uses a generic PVOID for the second
+     * parameter, but it is really an IRP pointer. The I/O manager always calls
+     * driver dispatch routines as
+     *   NTSTATUS (*PDRIVER_DISPATCH)(PDEVICE_OBJECT DeviceObject, PIRP Irp);
+     * so we safely cast here.
+     */
+    Irp = (PIRP)Tag;
+    if (!Irp)
+        return STATUS_INVALID_PARAMETER;
+
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+
+    switch (IrpSp->MinorFunction)
+    {
+        case IRP_MN_START_DEVICE:
+        case IRP_MN_QUERY_STOP_DEVICE:
+        case IRP_MN_STOP_DEVICE:
+        case IRP_MN_CANCEL_STOP_DEVICE:
+        case IRP_MN_QUERY_REMOVE_DEVICE:
+        case IRP_MN_REMOVE_DEVICE:
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+        case IRP_MN_SURPRISE_REMOVAL:
+        default:
+            /*
+             * For now we behave as a pure pass‑through filter and let the lower
+             * stack handle PnP policy. Once the scheduler / power model are more
+             * complete we can add explicit handling for start/stop/remove.
+             */
+            IoSkipCurrentIrpStackLocation(Irp);
+            Status = IoCallDriver(RxgkDriverExtension->NextDeviceObject, Irp);
+            return Status;
+    }
 }
 
 /*

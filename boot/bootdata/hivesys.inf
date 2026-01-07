@@ -5,7 +5,7 @@ Signature = "$Windows NT$"
 
 HKLM,"SYSTEM\CurrentControlSet\Services\nv","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\nv","Group",0x00000000,"Video"
-HKLM,"SYSTEM\CurrentControlSet\Services\nv","ImagePath",0x00020000,"system32\drivers\BasicDisplay.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","ImagePath",0x00020000,"system32\drivers\VBoxWDDM.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\nv","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\nv","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\nv","Tag",0x00010001,0x00000001
