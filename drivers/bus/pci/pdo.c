@@ -26,6 +26,90 @@
 
 /*** PRIVATE *****************************************************************/
 
+static
+__inline
+BOOLEAN
+PciIsVBoxDisplayDevice(_In_ const PCI_COMMON_CONFIG* PciConfig)
+{
+    /* VirtualBox VGA / WDDM device commonly enumerates as 80EE:BEEF */
+    return (PciConfig &&
+            PciConfig->VendorID == 0x80EE &&
+            PciConfig->DeviceID == 0xBEEF);
+}
+
+static
+__inline
+VOID
+PciDbgPrint(_In_z_ _Printf_format_string_ PCSTR Format, ...)
+{
+    va_list ap;
+    va_start(ap, Format);
+    vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, Format, ap);
+    va_end(ap);
+}
+
+static
+PCM_PARTIAL_RESOURCE_DESCRIPTOR
+PciFindBestBarResource(
+    _In_opt_ PCM_RESOURCE_LIST List,
+    _In_ BOOLEAN IoSpace,
+    _In_ ULONGLONG Length)
+{
+    if (!List || Length == 0)
+        return NULL;
+
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR bestNonZero = NULL;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR bestZero = NULL;
+
+    for (ULONG fi = 0; fi < List->Count; ++fi)
+    {
+        PCM_PARTIAL_RESOURCE_LIST pl = &List->List[fi].PartialResourceList;
+        for (ULONG pi = 0; pi < pl->Count; ++pi)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &pl->PartialDescriptors[pi];
+            if (d->Type == CmResourceTypeInterrupt)
+                continue;
+
+            if (IoSpace)
+            {
+                if (d->Type != CmResourceTypePort)
+                    continue;
+                if ((ULONGLONG)d->u.Port.Length != Length)
+                    continue;
+
+                if (d->u.Port.Start.QuadPart)
+                {
+                    if (!bestNonZero || d->u.Port.Start.QuadPart < bestNonZero->u.Port.Start.QuadPart)
+                        bestNonZero = d;
+                }
+                else
+                {
+                    bestZero = d;
+                }
+            }
+            else
+            {
+                if (d->Type != CmResourceTypeMemory)
+                    continue;
+                if ((ULONGLONG)d->u.Memory.Length != Length)
+                    continue;
+
+                if (d->u.Memory.Start.QuadPart)
+                {
+                    if (!bestNonZero || d->u.Memory.Start.QuadPart < bestNonZero->u.Memory.Start.QuadPart)
+                        bestNonZero = d;
+                }
+                else
+                {
+                    bestZero = d;
+                }
+            }
+        }
+    }
+
+    return bestNonZero ? bestNonZero : bestZero;
+}
+
 static NTSTATUS
 PdoQueryDeviceText(
     IN PDEVICE_OBJECT DeviceObject,
@@ -343,7 +427,11 @@ PdoGetRangeLength(PPDO_DEVICE_EXTENSION DeviceExtension,
         /* Write the maximum I/O port address */
         if (MaximumAddress != NULL)
         {
-            *MaximumAddress = 0x00000000FFFFFFFFULL;
+            /*
+             * We currently advertise 16-bit port decode in resource requirements,
+             * so keep the maximum address within 64K.
+             */
+            *MaximumAddress = 0x000000000000FFFFULL;
         }
     }
 
@@ -424,11 +512,11 @@ PdoQueryResourceRequirements(
                                    &Length,
                                    &Flags,
                                    &Bar,
-                                   NULL))
+                                   &MaximumAddress))
                 break;
 
             if (Length != 0)
-                ResCount += 2;
+                ResCount += (Base != 0) ? 2 : 1;
         }
 
         /* FIXME: Check ROM address */
@@ -446,11 +534,11 @@ PdoQueryResourceRequirements(
                                    &Length,
                                    &Flags,
                                    &Bar,
-                                   NULL))
+                                   &MaximumAddress))
                 break;
 
             if (Length != 0)
-                ResCount += 2;
+                ResCount += (Base != 0) ? 2 : 1;
         }
 
         if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
@@ -521,63 +609,130 @@ PdoQueryResourceRequirements(
                 continue;
             }
 
-            /* Set preferred descriptor */
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
+            /*
+             * If the BAR is unprogrammed (Base == 0), do NOT create a "preferred"
+             * fixed descriptor at address 0 (that causes the arbiter to allocate
+             * port/memory at 0 and propagates Start==0 into AllocatedResourcesTranslated).
+             * Instead, provide a single required descriptor covering the full range.
+             */
+            if (Base == 0)
             {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+                Descriptor->Option = 0; /* Required */
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    /*
+                     * Never ask the arbiter for port 0. On Windows, PCI I/O windows
+                     * are allocated above the legacy low I/O space.
+                     */
+                    const ULONGLONG MinIo = 0x1000;
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
 
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = Length;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = MinIo;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+
+                    if (PciIsVBoxDisplayDevice(&PciConfig))
+                    {
+                        PciDbgPrint("pci.sys: VBOX VGA unprogrammed IO BAR -> req Port [%I64x..%I64x] Len=%I64u Align=%lu\n",
+                                    Descriptor->u.Port.MinimumAddress.QuadPart,
+                                    Descriptor->u.Port.MaximumAddress.QuadPart,
+                                    Length,
+                                    Descriptor->u.Port.Alignment);
+                    }
+                }
+                else
+                {
+                    /*
+                     * Never ask the arbiter for MMIO at address 0. Keep it above
+                     * low memory; 16MB is a conservative floor.
+                     */
+                    const ULONGLONG MinMmio = 0x01000000;
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = Length;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = MinMmio;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+
+                    if (PciIsVBoxDisplayDevice(&PciConfig))
+                    {
+                        PciDbgPrint("pci.sys: VBOX VGA unprogrammed MEM BAR -> req MMIO [%I64x..%I64x] Len=%I64u Align=%lu\n",
+                                    Descriptor->u.Memory.MinimumAddress.QuadPart,
+                                    Descriptor->u.Memory.MaximumAddress.QuadPart,
+                                    Length,
+                                    Descriptor->u.Memory.Alignment);
+                    }
+                }
+                Descriptor++;
             }
             else
             {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+                /* Set preferred descriptor */
+                Descriptor->Option = IO_RESOURCE_PREFERRED;
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
 
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = 1;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = Base;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+                }
+                else
+                {
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = 1;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+                }
+                Descriptor++;
+
+                /* Set alternative descriptor */
+                Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = Length;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                else
+                {
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = Length;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                Descriptor++;
             }
-            Descriptor++;
-
-            /* Set alternative descriptor */
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
         }
 
         /* FIXME: Check ROM address */
@@ -615,63 +770,96 @@ PdoQueryResourceRequirements(
                 continue;
             }
 
-            /* Set preferred descriptor */
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
+            if (Base == 0)
             {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+                Descriptor->Option = 0; /* Required */
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
 
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = Length;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                else
+                {
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = Length;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                Descriptor++;
             }
             else
             {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+                /* Set preferred descriptor */
+                Descriptor->Option = IO_RESOURCE_PREFERRED;
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
 
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = 1;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = Base;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+                }
+                else
+                {
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = 1;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+                }
+                Descriptor++;
+
+                /* Set alternative descriptor */
+                Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+                if (Flags & PCI_ADDRESS_IO_SPACE)
+                {
+                    Descriptor->Type = CmResourceTypePort;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                        CM_RESOURCE_PORT_16_BIT_DECODE |
+                                        CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                    Descriptor->u.Port.Length = Length;
+                    Descriptor->u.Port.Alignment = Length;
+                    Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                else
+                {
+                    Descriptor->Type = CmResourceTypeMemory;
+                    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
+
+                    Descriptor->u.Memory.Length = Length;
+                    Descriptor->u.Memory.Alignment = Length;
+                    Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                    Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+                }
+                Descriptor++;
             }
-            Descriptor++;
-
-            /* Set alternative descriptor */
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
         }
 
         if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
@@ -1323,19 +1511,144 @@ PdoStartDevice(
     PIO_STACK_LOCATION IrpSp)
 {
     PCM_RESOURCE_LIST RawResList = IrpSp->Parameters.StartDevice.AllocatedResources;
+    PCM_RESOURCE_LIST TransResList = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
     PCM_FULL_RESOURCE_DESCRIPTOR RawFullDesc;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR RawPartialDesc;
     ULONG i, ii;
     PPDO_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
     UCHAR Irq;
     USHORT Command;
+    UCHAR Bar;
+    UCHAR NextBar;
+    ULONGLONG BarBase, BarLength;
+    ULONG BarFlags;
+    ULONG BarOffset;
+    ULONG BarLow;
+    const BOOLEAN IsVBoxVga = PciIsVBoxDisplayDevice(&DeviceExtension->PciDevice->PciConfig);
 
     UNREFERENCED_PARAMETER(Irp);
 
     if (!RawResList)
         return STATUS_SUCCESS;
 
-    /* TODO: Assign the other resources we get to the card */
+    /*
+     * Program BARs from the resources assigned by PnP. Without this, PCI config
+     * BARs can remain at 0/1 and consumers (and our own diagnostics) will see
+     * "unassigned" BARs despite successful resource arbitration.
+     *
+     * IMPORTANT: Only do this for the VBox VGA device during bring-up. A generic
+     * "program BARs from lists" approach requires correctly pairing resources to
+     * BAR indices (including 64-bit BARs), otherwise it can break storage and lead
+     * to INACCESSIBLE_BOOT_DEVICE (0x7B).
+     */
+    if (IsVBoxVga)
+    {
+        for (Bar = 0; Bar < PCI_TYPE0_ADDRESSES; Bar = NextBar)
+        {
+            /* Read current BAR low dword to decide if it is unprogrammed. */
+            ULONG currBarLow = 0;
+            ULONG currBarHigh = 0;
+            BOOLEAN currIsIo = FALSE;
+            ULONGLONG currBase = 0;
+
+            BarOffset = FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[0]) +
+                        Bar * sizeof(ULONG);
+
+            HalGetBusDataByOffset(PCIConfiguration,
+                                  DeviceExtension->PciDevice->BusNumber,
+                                  DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                  &currBarLow,
+                                  BarOffset,
+                                  sizeof(ULONG));
+
+            currIsIo = (currBarLow & PCI_ADDRESS_IO_SPACE) ? TRUE : FALSE;
+            currBase = currIsIo ? (currBarLow & PCI_ADDRESS_IO_ADDRESS_MASK) :
+                                  (currBarLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
+
+            if (!PdoGetRangeLength(DeviceExtension,
+                                   Bar,
+                                   &BarBase,
+                                   &BarLength,
+                                   &BarFlags,
+                                   &NextBar,
+                                   NULL))
+            {
+                break;
+            }
+
+            if (BarLength == 0)
+                continue;
+
+            /*
+             * Only fix BARs that are clearly unprogrammed. For I/O BARs, "0x1"
+             * is the typical unassigned value. For MMIO, base==0 means unassigned.
+             */
+            if (currIsIo)
+            {
+                if (currBase != 0)
+                    continue;
+            }
+            else
+            {
+                if (currBase != 0)
+                    continue;
+            }
+
+            const BOOLEAN IoSpace = (BarFlags & PCI_ADDRESS_IO_SPACE) ? TRUE : FALSE;
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR BestTrans = PciFindBestBarResource(TransResList, IoSpace, BarLength);
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR BestRaw = PciFindBestBarResource(RawResList, IoSpace, BarLength);
+
+            if (IoSpace)
+            {
+                ULONGLONG RawStart = (BestRaw && BestRaw->Type == CmResourceTypePort) ? BestRaw->u.Port.Start.QuadPart : 0ULL;
+                ULONGLONG TransStart = (BestTrans && BestTrans->Type == CmResourceTypePort) ? BestTrans->u.Port.Start.QuadPart : 0ULL;
+                ULONGLONG Start = TransStart ? TransStart : RawStart;
+
+                BarLow = (ULONG)((Start & ~0x3ULL) | PCI_ADDRESS_IO_SPACE);
+                HalSetBusDataByOffset(PCIConfiguration,
+                                      DeviceExtension->PciDevice->BusNumber,
+                                      DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                      &BarLow,
+                                      BarOffset,
+                                      sizeof(ULONG));
+
+                PciDbgPrint("pci.sys: VBOX VGA programmed IO BAR%u = %08x (raw=%I64x trans=%I64x used=%I64x)\n",
+                            Bar, BarLow, RawStart, TransStart, Start);
+            }
+            else
+            {
+                ULONGLONG RawStart = (BestRaw && BestRaw->Type == CmResourceTypeMemory) ? BestRaw->u.Memory.Start.QuadPart : 0ULL;
+                ULONGLONG TransStart = (BestTrans && BestTrans->Type == CmResourceTypeMemory) ? BestTrans->u.Memory.Start.QuadPart : 0ULL;
+                ULONGLONG Start = TransStart ? TransStart : RawStart;
+
+                /* Preserve BAR type/prefetch bits from existing config, replace address bits. */
+                BarLow = (currBarLow & ~PCI_ADDRESS_MEMORY_ADDRESS_MASK) |
+                         ((ULONG)(Start & PCI_ADDRESS_MEMORY_ADDRESS_MASK));
+
+                HalSetBusDataByOffset(PCIConfiguration,
+                                      DeviceExtension->PciDevice->BusNumber,
+                                      DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                      &BarLow,
+                                      BarOffset,
+                                      sizeof(ULONG));
+
+                PciDbgPrint("pci.sys: VBOX VGA programmed MEM BAR%u = %08x (raw=%I64x trans=%I64x used=%I64x)\n",
+                            Bar, BarLow, RawStart, TransStart, Start);
+
+                /* Handle 64-bit BAR high dword if needed. */
+                if ((currBarLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
+                {
+                    currBarHigh = (ULONG)(Start >> 32);
+                    HalSetBusDataByOffset(PCIConfiguration,
+                                          DeviceExtension->PciDevice->BusNumber,
+                                          DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                          &currBarHigh,
+                                          BarOffset + sizeof(ULONG),
+                                          sizeof(ULONG));
+                }
+            }
+        }
+    }
 
     RawFullDesc = &RawResList->List[0];
     for (i = 0; i < RawResList->Count; i++, RawFullDesc = CmiGetNextResourceDescriptor(RawFullDesc))

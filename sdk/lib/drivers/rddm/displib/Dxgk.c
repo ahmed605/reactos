@@ -230,11 +230,7 @@ DxgkInitializeDisplayOnlyDriver(
     FullInit.DxgkDdiGetScanLine = KmdDodInitializationData->DxgkDdiGetScanLine;
     FullInit.DxgkDdiQueryVidPnHWCapability = KmdDodInitializationData->DxgkDdiQueryVidPnHWCapability;
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-    FullInit.DxgkDdiPresentDisplayOnly = KmdDodInitializationData->DxgkDdiPresentDisplayOnly;
-#endif
-
-    /* Display-only present path */
+    /* Display-only drivers don't implement DxgkDdiPresent. */
     FullInit.DxgkDdiPresent = (PDXGKDDI_PRESENT)NULL;
     FullInit.DxgkDdiStopDeviceAndReleasePostDisplayOwnership = KmdDodInitializationData->DxgkDdiStopDeviceAndReleasePostDisplayOwnership;
     FullInit.DxgkDdiSystemDisplayEnable = KmdDodInitializationData->DxgkDdiSystemDisplayEnable;

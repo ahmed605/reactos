@@ -46,6 +46,14 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
         DPRINT1("DxgkPortInitializeMiniport: Couldn't allocate object extension status: 0x%X", Status);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    /*
+     * Ensure members used by callbacks have safe defaults early.
+     * In particular, DxgkCbSynchronizeExecution may be called before
+     * we've connected an interrupt.
+     */
+    RxgkDriverExtension->InterruptObject = NULL;
+    KeInitializeSpinLock(&RxgkDriverExtension->InterruptSpinLock);
  
     RxgkDriverExtension->Version = DriverInitData->Version;
     RxgkDriverExtension->DxgkDdiAddDevice = DriverInitData->DxgkDdiAddDevice;
@@ -61,9 +69,7 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
     RxgkDriverExtension->DxgkDdiSetVidPnSourceAddress = DriverInitData->DxgkDdiSetVidPnSourceAddress;
     RxgkDriverExtension->DxgkDdiSetVidPnSourceVisibility = DriverInitData->DxgkDdiSetVidPnSourceVisibility;
     RxgkDriverExtension->DxgkDdiUpdateActiveVidPnPresentPath = DriverInitData->DxgkDdiUpdateActiveVidPnPresentPath;
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-    RxgkDriverExtension->DxgkDdiPresentDisplayOnly = DriverInitData->DxgkDdiPresentDisplayOnly;
-#endif
+    RxgkDriverExtension->DxgkDdiEscape = DriverInitData->DxgkDdiEscape;
     RxgkDriverExtension->DxgkDdiQueryAdapterInfo = DriverInitData->DxgkDdiQueryAdapterInfo;
     RxgkDriverExtension->DxgkDdiCreateDevice = DriverInitData->DxgkDdiCreateDevice;
     RxgkDriverExtension->DxgkDdiCreateAllocation = DriverInitData->DxgkDdiCreateAllocation;

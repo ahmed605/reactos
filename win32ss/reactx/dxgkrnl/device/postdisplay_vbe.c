@@ -410,10 +410,6 @@ BOOLEAN
 NTAPI
 RxgkPostDisplayProgramVbeAndCache(_In_opt_ HANDLE DeviceHandleForTargetId)
 {
-#if defined(_M_IX86) || defined(_M_AMD64)
-    return RxgkpTryProgramVbeAndCache(DeviceHandleForTargetId);
-#else
     UNREFERENCED_PARAMETER(DeviceHandleForTargetId);
     return FALSE;
-#endif
 }

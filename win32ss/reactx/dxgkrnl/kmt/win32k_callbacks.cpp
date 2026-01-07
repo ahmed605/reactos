@@ -304,67 +304,82 @@ NTSTATUS
 APIENTRY
 RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
 {
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+    static LONG s_PresentDbg = 0;
+    LONG n = InterlockedIncrement(&s_PresentDbg);
     NTSTATUS Status;
-    DXGKARG_PRESENT_DISPLAYONLY PresentArgs;
+    DXGK_DISPLAY_INFORMATION DispInfo;
     RECT DirtyRect;
-    ULONG* SolidColor;
-    SIZE_T Width;
-    SIZE_T Height;
-    SIZE_T PixelCount;
-    SIZE_T BytesPerPixel;
-    SIZE_T Pitch;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
 
-    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiPresentDisplayOnly)
+    if (n <= 20)
+        DPRINT1("RxgkWin32kPresent #%ld: Args=%p DriverExt=%p Escape=%p\n",
+                n,
+                Args,
+                RxgkDriverExtension,
+                (RxgkDriverExtension ? RxgkDriverExtension->DxgkDdiEscape : NULL));
+
+    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiEscape)
         return STATUS_NOT_SUPPORTED;
 
+    RtlZeroMemory(&DispInfo, sizeof(DispInfo));
+    if (!RxgkPostDisplayTryGetDisplayInfo(&DispInfo))
+        return STATUS_NOT_SUPPORTED;
+
+    DirtyRect = Args->DstRect;
+    if (DirtyRect.right <= DirtyRect.left || DirtyRect.bottom <= DirtyRect.top)
+    {
+        DirtyRect.left = 0;
+        DirtyRect.top = 0;
+        DirtyRect.right = (LONG)DispInfo.Width;
+        DirtyRect.bottom = (LONG)DispInfo.Height;
+    }
+
     /*
-     * Bring-up present path:
-     * - We don't have real allocation/locking wired yet.
-     * - Present a solid color fill using Args->Color.
+     * VBox WDDM (Gallium) provides a debug escape VBOXESC_GAPRESENT that triggers
+     * a screen update. Use it as a bring-up present until we have a proper
+     * DXGKARG_PRESENT pipeline.
+     *
+     * NOTE: This is VBox-specific and should be replaced with real Present.
      */
-    Width = (Args->DstRect.right > Args->DstRect.left) ? (SIZE_T)(Args->DstRect.right - Args->DstRect.left) : 800;
-    Height = (Args->DstRect.bottom > Args->DstRect.top) ? (SIZE_T)(Args->DstRect.bottom - Args->DstRect.top) : 600;
-    if (Width == 0) Width = 800;
-    if (Height == 0) Height = 600;
+    typedef struct _VBOXDISPIFESCAPE_ROS
+    {
+        UINT escapeCode;
+        UINT u32CmdSpecific;
+    } VBOXDISPIFESCAPE_ROS;
 
-    BytesPerPixel = 4;
-    Pitch = Width * BytesPerPixel;
-    PixelCount = Width * Height;
+    typedef struct _VBOXDISPIFESCAPE_GAPRESENT_ROS
+    {
+        VBOXDISPIFESCAPE_ROS EscapeHdr;
+        UINT u32Sid;
+        UINT u32Width;
+        UINT u32Height;
+    } VBOXDISPIFESCAPE_GAPRESENT_ROS;
 
-    SolidColor = (ULONG*)ExAllocatePoolWithTag(NonPagedPool, PixelCount * sizeof(ULONG), 'DoPR');
-    if (!SolidColor)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    /* From VBoxMPIf.h */
+    #define VBOXESC_GAPRESENT_ROS 0xA0000004u
 
-    RtlFillMemoryUlong(SolidColor, PixelCount * sizeof(ULONG), Args->Color);
+    VBOXDISPIFESCAPE_GAPRESENT_ROS GaPresent;
+    DXGKARG_ESCAPE EscapeArgs;
 
-    DirtyRect.left = 0;
-    DirtyRect.top = 0;
-    DirtyRect.right = (LONG)Width;
-    DirtyRect.bottom = (LONG)Height;
+    RtlZeroMemory(&GaPresent, sizeof(GaPresent));
+    GaPresent.EscapeHdr.escapeCode = VBOXESC_GAPRESENT_ROS;
+    GaPresent.EscapeHdr.u32CmdSpecific = 0;
+    GaPresent.u32Sid = 0; /* Debug helper uses start of VRAM; sid is ignored/driver-specific. */
+    GaPresent.u32Width = (UINT)DispInfo.Width;
+    GaPresent.u32Height = (UINT)DispInfo.Height;
 
-    RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
-    PresentArgs.VidPnSourceId = Args->VidPnSourceId;
-    PresentArgs.pSource = SolidColor;
-    PresentArgs.BytesPerPixel = (ULONG)BytesPerPixel;
-    PresentArgs.Pitch = (LONG)Pitch;
-    PresentArgs.Flags.Value = 0;
-    PresentArgs.NumMoves = 0;
-    PresentArgs.pMoves = NULL;
-    PresentArgs.NumDirtyRects = 1;
-    PresentArgs.pDirtyRect = &DirtyRect;
-    PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
+    RtlZeroMemory(&EscapeArgs, sizeof(EscapeArgs));
+    EscapeArgs.Flags.Value = 0;
+    EscapeArgs.hDevice = NULL;
+    EscapeArgs.hContext = NULL;
+    EscapeArgs.PrivateDriverDataSize = sizeof(GaPresent);
+    EscapeArgs.pPrivateDriverData = &GaPresent;
 
-    Status = RxgkDriverExtension->DxgkDdiPresentDisplayOnly(RxgkDriverExtension->MiniportContext, &PresentArgs);
-    DPRINT1("RxgkWin32kPresent: PresentDisplayOnly -> 0x%08X (Color=0x%08X)\n", Status, Args->Color);
-
-    ExFreePoolWithTag(SolidColor, 'DoPR');
+    Status = RxgkDriverExtension->DxgkDdiEscape(RxgkDriverExtension->MiniportContext, &EscapeArgs);
+    if (n <= 20)
+        DPRINT1("RxgkWin32kPresent: Escape(GAPRESENT) -> 0x%08X (Dirty=%ld,%ld-%ld,%ld)\n",
+                Status, DirtyRect.left, DirtyRect.top, DirtyRect.right, DirtyRect.bottom);
     return Status;
-#else
-    UNREFERENCED_PARAMETER(Args);
-    return STATUS_NOT_SUPPORTED;
-#endif
 }

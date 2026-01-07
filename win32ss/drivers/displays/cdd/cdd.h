@@ -233,6 +233,11 @@ DrvBitBlt(_Inout_ SURFOBJ  *psoTrg,
           _In_opt_ POINTL   *pptlBrush,
           _In_ ROP4      rop4);
 
+BOOL
+APIENTRY
+CddPresent(_In_ DHPDEV dhpdev,
+           _In_opt_ const RECTL* prcl);
+
 
 VOID
 APIENTRY

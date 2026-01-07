@@ -1,6 +1,8 @@
 #include "cdd.h"
 #include <debug.h>
 
+static LONG g_CddDbgBitBltCalls = 0;
+
 
 
 BOOL
@@ -17,8 +19,30 @@ DrvBitBlt(_Inout_ SURFOBJ  *psoTrg,
           _In_opt_ POINTL   *pptlBrush,
           _In_ ROP4      rop4)
 {
-    UNIMPLEMENTED;
-    return TRUE;
+    /*
+     * CDD is essentially a delegating display driver. Implement BitBlt by
+     * forwarding to the GDI engine. This enables basic GDI operations like
+     * window moves, scrolls, fills, and DIB blits.
+     */
+    BOOL ok = EngBitBlt(psoTrg,
+                     psoSrc,
+                     psoMask,
+                     pco,
+                     pxlo,
+                     prclTrg,
+                     pptlSrc,
+                     pptlMask,
+                     pbo,
+                     pptlBrush,
+                     rop4);
+    if (ok && psoTrg)
+    {
+        LONG n = InterlockedIncrement(&g_CddDbgBitBltCalls);
+        if (n <= 20)
+            DPRINT1("cdd: DrvBitBlt ok -> CddPresent (dhpdev=%p)\n", (PVOID)psoTrg->dhpdev);
+        CddPresent(psoTrg->dhpdev, prclTrg);
+    }
+    return ok;
 }
 
 
@@ -28,8 +52,9 @@ VOID APIENTRY DrvSynchronizeSurface(
     FLONG    fl
 )
 {
-    UNIMPLEMENTED;
-    __debugbreak();
+    UNREFERENCED_PARAMETER(fl);
+    if (pso)
+        (void)CddPresent(pso->dhpdev, prcl);
 }
 
 BOOL APIENTRY DrvStrokePath(
@@ -73,9 +98,18 @@ DrvCopyBits(_Out_ SURFOBJ*  DestObj,
             _In_  RECTL*    DestRectL,
             _In_  POINTL*   SrcPointL)
 {
-    return  DrvBitBlt(DestObj, SourceObj, 0,
-                        ClipObj, XLateObj, DestRectL,
-                        SrcPointL, 0, 0, 0, FALSE);
+    /* Equivalent to SRCCOPY for both foreground/background. */
+    return DrvBitBlt(DestObj,
+                     SourceObj,
+                     NULL,
+                     ClipObj,
+                     XLateObj,
+                     DestRectL,
+                     SrcPointL,
+                     NULL,
+                     NULL,
+                     NULL,
+                     MAKEROP4(SRCCOPY, SRCCOPY));
 }
 
 
@@ -92,9 +126,12 @@ BOOL APIENTRY DrvTextOut(
     _In_ MIX       mix
     )
 {
-    return EngTextOut(pso, pstro, pfo, pco,
+    BOOL ok = EngTextOut(pso, pstro, pfo, pco,
                       prclExtra, prclOpaque, pboFore,
                        pboOpaque, pptlOrg, mix);
+    if (ok && pso)
+        CddPresent(pso->dhpdev, prclOpaque);
+    return ok;
 }
 
 BOOL APIENTRY

@@ -7,13 +7,122 @@
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 extern DXGKRNL_INTERFACE DxgkrnlInterface;
 
+static
+ULONG
+RxgkpGetResourceListSize(_In_ PCM_RESOURCE_LIST List)
+{
+    ULONG size = FIELD_OFFSET(CM_RESOURCE_LIST, List);
+
+    if (!List)
+        return 0;
+
+    for (ULONG fullIndex = 0; fullIndex < List->Count; ++fullIndex)
+    {
+        PCM_FULL_RESOURCE_DESCRIPTOR full = &List->List[fullIndex];
+        ULONG partialCount = full->PartialResourceList.Count;
+
+        size += FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList.PartialDescriptors);
+        size += partialCount * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    }
+
+    return size;
+}
+
+static
+NTSTATUS
+RxgkpCacheTranslatedResourcesFromStartIrp(_In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION irpSp;
+    PCM_RESOURCE_LIST translated;
+    ULONG size;
+    PVOID copy;
+
+    if (!RxgkDriverExtension || !Irp)
+        return STATUS_INVALID_PARAMETER;
+
+    irpSp = IoGetCurrentIrpStackLocation(Irp);
+    if (irpSp->MinorFunction != IRP_MN_START_DEVICE)
+        return STATUS_INVALID_PARAMETER;
+
+    translated = irpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
+    if (!translated)
+        return STATUS_SUCCESS;
+
+    size = RxgkpGetResourceListSize(translated);
+    if (!size)
+        return STATUS_SUCCESS;
+
+    copy = ExAllocatePoolWithTag(NonPagedPool, size, 'RsxR');
+    if (!copy)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlCopyMemory(copy, translated, size);
+
+    if (RxgkDriverExtension->AllocatedResourcesTranslated)
+    {
+        ExFreePoolWithTag(RxgkDriverExtension->AllocatedResourcesTranslated, 'RsxR');
+    }
+
+    RxgkDriverExtension->AllocatedResourcesTranslated = (PCM_RESOURCE_LIST)copy;
+    RxgkDriverExtension->AllocatedResourcesTranslatedSize = size;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NTAPI
+RxgkpPnpStartCompletionRoutine(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PKEVENT event = (PKEVENT)Context;
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (event)
+        KeSetEvent(event, IO_NO_INCREMENT, FALSE);
+
+    /* Stop completion from freeing the IRP stack on us. */
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+NTSTATUS
+RxgkpForwardIrpAndWait(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp)
+{
+    KEVENT event;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    KeInitializeEvent(&event, SynchronizationEvent, FALSE);
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp,
+                           RxgkpPnpStartCompletionRoutine,
+                           &event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    status = IoCallDriver(RxgkDriverExtension->NextDeviceObject, Irp);
+    if (status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = Irp->IoStatus.Status;
+    }
+
+    return status;
+}
+
 
 BOOLEAN NTAPI
 IntVideoPortInterruptRoutine(
    IN struct _KINTERRUPT *Interrupt,
    IN PVOID ServiceContext)
 {
-    DPRINT1("RxgkIntVideoPortInterruptRoutine: Entry");
+   // DPRINT("RxgkIntVideoPortInterruptRoutine: Entry\n");
     return RxgkDriverExtension->DxgkDdiInterruptRoutine(RxgkDriverExtension->MiniportContext, 0);
 }
 
@@ -122,10 +231,8 @@ RxgkSetupInterrupts()
     }
 
     /* Free the resource list now that we're done with it */
-    if (ResourceList)
-    {
+    if (ResourceList && ResourceList != RxgkDriverExtension->AllocatedResourcesTranslated)
         ExFreePool(ResourceList);
-    }
 
     IntVideoPortSetupInterrupt();
 }
@@ -228,7 +335,11 @@ RxgkStartAdapter()
     DPRINT1("RxgkDriverExtension->DxgkDdiStartDevice: returned with Status %X\n", Status);
 
     if (!NT_SUCCESS(Status))
+    {
+      //  DPRINT1("RxgkStartAdapter: Miniport StartAdapter failed %X\n", Status);
+        __debugbreak();
         return Status;
+    }
 
     DXGKARG_ENUMVIDPNCOFUNCMODALITY EnumCofunc = {0};
     D3DKMDT_HVIDPN hConstrainingVidPn = NULL;
@@ -493,6 +604,18 @@ RxgkPortDispatchPnp(_In_ PDEVICE_OBJECT DeviceObject,
     switch (IrpSp->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
+        {
+            Status = RxgkpForwardIrpAndWait(DeviceObject, Irp);
+            if (NT_SUCCESS(Status) && NT_SUCCESS(Irp->IoStatus.Status))
+            {
+                (VOID)RxgkpCacheTranslatedResourcesFromStartIrp(Irp);
+            }
+
+            Irp->IoStatus.Status = Status;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Status;
+        }
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_STOP_DEVICE:
         case IRP_MN_CANCEL_STOP_DEVICE:

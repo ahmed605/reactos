@@ -1619,10 +1619,6 @@ typedef struct _DRIVER_INITIALIZATION_DATA {
     PDXGKDDI_CLOSEALLOCATION                 DxgkDdiCloseAllocation;
     PDXGKDDI_RENDER                          DxgkDdiRender;
     PDXGKDDI_PRESENT                         DxgkDdiPresent;
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-    /* Display-only (KMDDOD) present path */
-    PDXGKDDI_PRESENTDISPLAYONLY              DxgkDdiPresentDisplayOnly;
-#endif
     PDXGKDDI_UPDATEOVERLAY                   DxgkDdiUpdateOverlay;
     PDXGKDDI_FLIPOVERLAY                     DxgkDdiFlipOverlay;
     PDXGKDDI_DESTROYOVERLAY                  DxgkDdiDestroyOverlay;

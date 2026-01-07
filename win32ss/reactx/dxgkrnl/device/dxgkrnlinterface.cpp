@@ -8,6 +8,497 @@
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 DXGKRNL_INTERFACE DxgkrnlInterface;
 
+/* Recent successful small MMIO mappings (used to infer missing BAR bases during bring-up). */
+static ULONGLONG g_RxgkRecentMapPhys[8] = {0};
+static volatile LONG g_RxgkRecentMapIndex = 0;
+
+/*
+ * Track mappings created via DxgkCbMapMemory so DxgkCbUnmapMemory can properly unmap.
+ * VBox and other miniports rely on UnmapMemory being functional.
+ */
+typedef enum _RXGK_MAP_KIND
+{
+    RxgkMapKindMmIoSpace = 0,
+    RxgkMapKindUserSection = 1,
+} RXGK_MAP_KIND;
+
+typedef struct _RXGK_MAPPED_RANGE
+{
+    LIST_ENTRY Link;
+    PVOID VirtualAddress;
+    SIZE_T Length;
+    RXGK_MAP_KIND Kind;
+    HANDLE Process; /* only valid for user mappings */
+} RXGK_MAPPED_RANGE, *PRXGK_MAPPED_RANGE;
+
+static LIST_ENTRY g_RxgkMappedRangeList;
+static KSPIN_LOCK g_RxgkMappedRangeLock;
+static volatile LONG g_RxgkMappedRangeInit = 0;
+
+static
+VOID
+RxgkpEnsureMappedRangeListInitialized(VOID)
+{
+    if (InterlockedCompareExchange(&g_RxgkMappedRangeInit, 1, 0) == 0)
+    {
+        InitializeListHead(&g_RxgkMappedRangeList);
+        KeInitializeSpinLock(&g_RxgkMappedRangeLock);
+    }
+}
+
+static
+VOID
+RxgkpTrackMappedRange(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T Length,
+    _In_ RXGK_MAP_KIND Kind,
+    _In_opt_ HANDLE Process)
+{
+    PRXGK_MAPPED_RANGE range;
+    KIRQL oldIrql;
+
+    if (!VirtualAddress || !Length)
+        return;
+
+    range = (PRXGK_MAPPED_RANGE)ExAllocatePoolWithTag(NonPagedPool,
+                                                     sizeof(*range),
+                                                     'gMxR');
+    if (!range)
+        return;
+
+    range->VirtualAddress = VirtualAddress;
+    range->Length = Length;
+    range->Kind = Kind;
+    range->Process = Process;
+
+    KeAcquireSpinLock(&g_RxgkMappedRangeLock, &oldIrql);
+    InsertHeadList(&g_RxgkMappedRangeList, &range->Link);
+    KeReleaseSpinLock(&g_RxgkMappedRangeLock, oldIrql);
+}
+
+static
+VOID
+RxgkpNormalizeResourceListForMiniports(
+    _Inout_ PCM_RESOURCE_LIST ResourceList)
+{
+    if (!ResourceList)
+        return;
+
+    static volatile LONG s_DumpedZeroStartOnce = 0;
+    static volatile LONG s_DumpedZeroPortOnce = 0;
+
+    auto DumpResourceList = [&](PCM_RESOURCE_LIST List)
+    {
+        if (!List)
+            return;
+
+        DPRINT1("Dxgkrnl: CM_RESOURCE_LIST %p Count=%lu\n", List, List->Count);
+        for (ULONG fi = 0; fi < List->Count; ++fi)
+        {
+            PCM_PARTIAL_RESOURCE_LIST pl = &List->List[fi].PartialResourceList;
+            DPRINT1("  Full[%lu] PartialCount=%lu\n", fi, pl->Count);
+            for (ULONG pi = 0; pi < pl->Count && pi < 32; ++pi)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &pl->PartialDescriptors[pi];
+                if (d->Type == CmResourceTypeMemory)
+                {
+                    DPRINT1("    [%lu] MEM Start=%I64x Len=%lu Flags=%x\n",
+                            pi, d->u.Memory.Start.QuadPart, d->u.Memory.Length, d->Flags);
+                }
+                else if (d->Type == CmResourceTypePort)
+                {
+                    DPRINT1("    [%lu] PORT Start=%I64x Len=%lu Flags=%x\n",
+                            pi, d->u.Port.Start.QuadPart, d->u.Port.Length, d->Flags);
+                }
+                else if (d->Type == CmResourceTypeInterrupt)
+                {
+                    DPRINT1("    [%lu] INTR Level=%lu Vector=%lu Aff=%Ix\n",
+                            pi, d->u.Interrupt.Level, d->u.Interrupt.Vector, d->u.Interrupt.Affinity);
+                }
+                else
+                {
+                    DPRINT1("    [%lu] Type=%u\n", pi, d->Type);
+                }
+            }
+        }
+    };
+
+    /*
+     * Compute global heuristics across the whole list first. Some stacks place
+     * different BARs in different CM_FULL_RESOURCE_DESCRIPTOR entries.
+     */
+    ULONGLONG globalVramStart = 0;
+    ULONG globalVramLen = 0;
+    ULONGLONG globalMinMmioStart = 0;
+    ULONGLONG globalMinMmioStartHi = 0;
+    ULONGLONG globalPortBaseLen16 = 0;
+
+    for (ULONG fullIndex = 0; fullIndex < ResourceList->Count; ++fullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_LIST partialList = &ResourceList->List[fullIndex].PartialResourceList;
+        for (ULONG k = 0; k < partialList->Count; ++k)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &partialList->PartialDescriptors[k];
+            if (d->Type == CmResourceTypeMemory)
+            {
+                if (d->u.Memory.Start.QuadPart && d->u.Memory.Length)
+                {
+                    if (d->u.Memory.Length > globalVramLen)
+                    {
+                        globalVramLen = d->u.Memory.Length;
+                        globalVramStart = d->u.Memory.Start.QuadPart;
+                    }
+                }
+            }
+            else if (d->Type == CmResourceTypePort)
+            {
+                if (d->u.Port.Start.QuadPart && d->u.Port.Length == 16)
+                {
+                    if (globalPortBaseLen16 == 0 || d->u.Port.Start.QuadPart < globalPortBaseLen16)
+                        globalPortBaseLen16 = d->u.Port.Start.QuadPart;
+                }
+            }
+        }
+    }
+
+    for (ULONG fullIndex = 0; fullIndex < ResourceList->Count; ++fullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_LIST partialList = &ResourceList->List[fullIndex].PartialResourceList;
+        for (ULONG k = 0; k < partialList->Count; ++k)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &partialList->PartialDescriptors[k];
+            if (d->Type != CmResourceTypeMemory)
+                continue;
+            if (d->u.Memory.Start.QuadPart == 0 || d->u.Memory.Length == 0)
+                continue;
+            /* Skip the VRAM aperture itself. */
+            if (d->u.Memory.Start.QuadPart == globalVramStart && d->u.Memory.Length == globalVramLen)
+                continue;
+            if (globalMinMmioStart == 0 || d->u.Memory.Start.QuadPart < globalMinMmioStart)
+                globalMinMmioStart = d->u.Memory.Start.QuadPart;
+            /*
+             * Ignore legacy low-memory apertures when trying to infer PCI BAR bases.
+             * These (e.g. VGA 0xA0000/0xC0000) can cause align-down for a large BAR
+             * size (2MB) to produce 0, leaving the BAR unfixed.
+             */
+            if (d->u.Memory.Start.QuadPart >= (16ULL * 1024 * 1024))
+            {
+                if (globalMinMmioStartHi == 0 || d->u.Memory.Start.QuadPart < globalMinMmioStartHi)
+                    globalMinMmioStartHi = d->u.Memory.Start.QuadPart;
+            }
+        }
+    }
+
+    for (ULONG fullIndex = 0; fullIndex < ResourceList->Count; ++fullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_LIST partialList = &ResourceList->List[fullIndex].PartialResourceList;
+        ULONG count = partialList->Count;
+
+        if (count >= 2)
+        {
+            /*
+             * Some miniports (notably VBoxWddm VMSVGA) assume the first MEMORY resource is
+             * the VRAM aperture. Ensure MEMORY descriptors are ordered by descending Length
+             * so the largest mapping (VRAM) comes first.
+             */
+            for (ULONG i = 0; i < count; ++i)
+            {
+                for (ULONG j = i + 1; j < count; ++j)
+                {
+                    PCM_PARTIAL_RESOURCE_DESCRIPTOR a = &partialList->PartialDescriptors[i];
+                    PCM_PARTIAL_RESOURCE_DESCRIPTOR b = &partialList->PartialDescriptors[j];
+
+                    if (a->Type == CmResourceTypeMemory && b->Type == CmResourceTypeMemory)
+                    {
+                        if (b->u.Memory.Length > a->u.Memory.Length)
+                        {
+                            CM_PARTIAL_RESOURCE_DESCRIPTOR tmp = *a;
+                            *a = *b;
+                            *b = tmp;
+                        }
+                    }
+                    else if (a->Type != CmResourceTypeMemory && b->Type == CmResourceTypeMemory)
+                    {
+                        /* Bubble MEMORY descriptors toward the front, preserving relative order otherwise. */
+                        CM_PARTIAL_RESOURCE_DESCRIPTOR tmp = *a;
+                        *a = *b;
+                        *b = tmp;
+                    }
+                }
+            }
+        }
+
+        /*
+         * Bring-up workaround: some environments may provide a MEMORY descriptor with
+         * a valid Length but Start==0 (unassigned BAR). VBoxWddm then passes PA=0 to
+         * DxgkCbMapMemory and fails. Infer a plausible base from other MMIO descriptors.
+         *
+         * Use the smallest nonzero MMIO start across the entire resource list (excluding
+         * the largest VRAM range), then align down to the requested range length.
+         */
+        ULONGLONG minForFix = globalMinMmioStartHi ? globalMinMmioStartHi : globalMinMmioStart;
+        if (minForFix)
+        {
+            for (ULONG k = 0; k < count; ++k)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &partialList->PartialDescriptors[k];
+                if (d->Type != CmResourceTypeMemory)
+                    continue;
+                if (d->u.Memory.Start.QuadPart != 0 || d->u.Memory.Length == 0)
+                    continue;
+
+                if (InterlockedCompareExchange(&s_DumpedZeroStartOnce, 1, 0) == 0)
+                {
+                    DPRINT1("Dxgkrnl: detected MEMORY Start==0 Len=%lu, dumping resources\n", d->u.Memory.Length);
+                    DumpResourceList(ResourceList);
+                }
+
+                ULONGLONG len = (ULONGLONG)d->u.Memory.Length;
+                ULONGLONG base = minForFix;
+
+                /* If length is power-of-two, align down to that boundary; otherwise page-align. */
+                if (len && ((len & (len - 1)) == 0))
+                    base &= ~(len - 1);
+                else
+                    base &= ~((ULONGLONG)PAGE_SIZE - 1);
+
+                if (base != 0)
+                {
+                    DPRINT1("Dxgkrnl: fixing zero Start for MEMORY len=%lu using base=%I64x (minMmio=%I64x)\n",
+                            d->u.Memory.Length, base, minForFix);
+                    d->u.Memory.Start.QuadPart = base;
+                }
+                else
+                {
+                    DPRINT1("Dxgkrnl: found zero Start for MEMORY len=%lu but could not infer base (globalMinMmio=0)\n",
+                            d->u.Memory.Length);
+                }
+            }
+        }
+
+        /*
+         * If we have a valid port base (len 16) anywhere in the list, ensure we
+         * never expose a zero-start port descriptor of the same kind. VBoxWddm
+         * will otherwise pick Start==0 and fail its SVGA probe.
+         */
+        if (globalPortBaseLen16)
+        {
+            for (ULONG k = 0; k < count; ++k)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &partialList->PartialDescriptors[k];
+                if (d->Type != CmResourceTypePort)
+                    continue;
+                if (d->u.Port.Length != 16)
+                    continue;
+                if (d->u.Port.Start.QuadPart != 0)
+                    continue;
+
+                if (InterlockedCompareExchange(&s_DumpedZeroPortOnce, 1, 0) == 0)
+                {
+                    DPRINT1("Dxgkrnl: detected PORT Start==0 Len=16; dumping resources\n");
+                    DumpResourceList(ResourceList);
+                }
+
+                DPRINT1("Dxgkrnl: fixing zero Start for PORT len=16 using base=%I64x\n",
+                        globalPortBaseLen16);
+                d->u.Port.Start.QuadPart = globalPortBaseLen16;
+            }
+        }
+    }
+}
+
+static
+VOID
+RxgkpDumpResourceListSummary(
+    _In_ PCM_RESOURCE_LIST List)
+{
+    if (!List)
+        return;
+
+    DPRINT1("Dxgkrnl: CM_RESOURCE_LIST %p Count=%lu\n", List, List->Count);
+    for (ULONG fi = 0; fi < List->Count; ++fi)
+    {
+        PCM_PARTIAL_RESOURCE_LIST pl = &List->List[fi].PartialResourceList;
+        DPRINT1("  Full[%lu] PartialCount=%lu\n", fi, pl->Count);
+        for (ULONG pi = 0; pi < pl->Count && pi < 64; ++pi)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &pl->PartialDescriptors[pi];
+            switch (d->Type)
+            {
+                case CmResourceTypeMemory:
+                    DPRINT1("    [%lu] MEM  Start=%I64x Len=%lu Flags=%x\n",
+                            pi, d->u.Memory.Start.QuadPart, d->u.Memory.Length, d->Flags);
+                    break;
+                case CmResourceTypePort:
+                    DPRINT1("    [%lu] PORT Start=%I64x Len=%lu Flags=%x\n",
+                            pi, d->u.Port.Start.QuadPart, d->u.Port.Length, d->Flags);
+                    break;
+                case CmResourceTypeInterrupt:
+                    DPRINT1("    [%lu] INTR Level=%lu Vector=%lu Aff=%Ix\n",
+                            pi, d->u.Interrupt.Level, d->u.Interrupt.Vector, d->u.Interrupt.Affinity);
+                    break;
+                default:
+                    DPRINT1("    [%lu] Type=%u\n", pi, d->Type);
+                    break;
+            }
+        }
+    }
+}
+
+static
+ULONGLONG
+RxgkpInferMissingBarBaseFromCachedResources(
+    _In_ PCM_RESOURCE_LIST List,
+    _In_ ULONG Length)
+{
+    ULONGLONG vramStart = 0;
+    ULONG vramLen = 0;
+    ULONGLONG minMmioHi = 0;
+
+    if (!List || Length == 0)
+        return 0;
+
+    /* Find VRAM as the largest memory range. */
+    for (ULONG fi = 0; fi < List->Count; ++fi)
+    {
+        PCM_PARTIAL_RESOURCE_LIST pl = &List->List[fi].PartialResourceList;
+        for (ULONG pi = 0; pi < pl->Count; ++pi)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &pl->PartialDescriptors[pi];
+            if (d->Type != CmResourceTypeMemory)
+                continue;
+            if (!d->u.Memory.Start.QuadPart || !d->u.Memory.Length)
+                continue;
+            if (d->u.Memory.Length > vramLen)
+            {
+                vramLen = d->u.Memory.Length;
+                vramStart = d->u.Memory.Start.QuadPart;
+            }
+        }
+    }
+
+    /* Find smallest non-legacy MMIO start excluding VRAM. */
+    for (ULONG fi = 0; fi < List->Count; ++fi)
+    {
+        PCM_PARTIAL_RESOURCE_LIST pl = &List->List[fi].PartialResourceList;
+        for (ULONG pi = 0; pi < pl->Count; ++pi)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &pl->PartialDescriptors[pi];
+            if (d->Type != CmResourceTypeMemory)
+                continue;
+            if (!d->u.Memory.Start.QuadPart || !d->u.Memory.Length)
+                continue;
+            if (d->u.Memory.Start.QuadPart == vramStart && d->u.Memory.Length == vramLen)
+                continue;
+            if (d->u.Memory.Start.QuadPart < (16ULL * 1024 * 1024))
+                continue;
+            if (minMmioHi == 0 || d->u.Memory.Start.QuadPart < minMmioHi)
+                minMmioHi = d->u.Memory.Start.QuadPart;
+        }
+    }
+
+    if (!minMmioHi)
+        return 0;
+
+    ULONGLONG base = minMmioHi;
+    ULONGLONG len = (ULONGLONG)Length;
+    if ((len & (len - 1)) == 0)
+        base &= ~(len - 1);
+    else
+        base &= ~((ULONGLONG)PAGE_SIZE - 1);
+
+    return base;
+}
+
+static
+ULONGLONG
+RxgkpInferMissingBarBaseFromRecentMappings(
+    _In_ ULONG Length);
+
+static
+VOID
+RxgkpFixupZeroPortBarFromPciConfig(
+    _Inout_ PCM_RESOURCE_LIST ResourceList,
+    _In_ const PCI_COMMON_CONFIG* Config)
+{
+    if (!ResourceList || !Config)
+        return;
+
+    /* Find an I/O BAR base from PCI config. */
+    ULONGLONG ioBase = 0;
+    for (ULONG i = 0; i < PCI_TYPE0_ADDRESSES; ++i)
+    {
+        ULONG bar = Config->u.type0.BaseAddresses[i];
+        if (bar & PCI_ADDRESS_IO_SPACE)
+        {
+            ioBase = (ULONGLONG)(bar & PCI_ADDRESS_IO_ADDRESS_MASK);
+            if (ioBase)
+                break;
+        }
+    }
+
+    /*
+     * If PCI config doesn't report an I/O BAR base, do NOT invent one here.
+     * On Windows, this comes from proper PCI resource assignment; if we don't
+     * have it, the underlying PCI/PnP stack needs to be fixed.
+     */
+    if (!ioBase)
+    {
+        DPRINT1("Dxgkrnl: PCI config has no IO BAR base; BARs: %08x %08x %08x %08x %08x %08x Cmd=%04x\n",
+                Config->u.type0.BaseAddresses[0],
+                Config->u.type0.BaseAddresses[1],
+                Config->u.type0.BaseAddresses[2],
+                Config->u.type0.BaseAddresses[3],
+                Config->u.type0.BaseAddresses[4],
+                Config->u.type0.BaseAddresses[5],
+                Config->Command);
+        return;
+    }
+
+    for (ULONG fullIndex = 0; fullIndex < ResourceList->Count; ++fullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_LIST partialList = &ResourceList->List[fullIndex].PartialResourceList;
+        for (ULONG k = 0; k < partialList->Count; ++k)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &partialList->PartialDescriptors[k];
+            if (d->Type != CmResourceTypePort)
+                continue;
+            if (d->u.Port.Start.QuadPart != 0 || d->u.Port.Length == 0)
+                continue;
+
+            DPRINT1("Dxgkrnl: fixing zero PORT Start len=%lu using pci ioBase=%I64x\n",
+                    d->u.Port.Length, ioBase);
+            d->u.Port.Start.QuadPart = ioBase;
+            return;
+        }
+    }
+}
+
+static
+PRXGK_MAPPED_RANGE
+RxgkpUnlinkMappedRangeByVa(
+    _In_ PVOID VirtualAddress)
+{
+    KIRQL oldIrql;
+    PLIST_ENTRY entry;
+
+    KeAcquireSpinLock(&g_RxgkMappedRangeLock, &oldIrql);
+    for (entry = g_RxgkMappedRangeList.Flink;
+         entry != &g_RxgkMappedRangeList;
+         entry = entry->Flink)
+    {
+        PRXGK_MAPPED_RANGE range = CONTAINING_RECORD(entry, RXGK_MAPPED_RANGE, Link);
+        if (range->VirtualAddress == VirtualAddress)
+        {
+            RemoveEntryList(&range->Link);
+            KeReleaseSpinLock(&g_RxgkMappedRangeLock, oldIrql);
+            return range;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkMappedRangeLock, oldIrql);
+    return NULL;
+}
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 static FAST_MUTEX g_PostDisplayMutex;
 static BOOLEAN g_PostDisplayMutexInitialized = FALSE;
@@ -61,9 +552,13 @@ RxgkpFindLikelyFramebufferResource(
     _Out_ PHYSICAL_ADDRESS* PhysicalAddress,
     _Out_ ULONG* Length)
 {
-    ULONG bestLength = 0;
-    PHYSICAL_ADDRESS bestStart;
-    bestStart.QuadPart = 0;
+    ULONG bestPrefetchLength = 0;
+    PHYSICAL_ADDRESS bestPrefetchStart;
+    ULONG bestAnyLength = 0;
+    PHYSICAL_ADDRESS bestAnyStart;
+
+    bestPrefetchStart.QuadPart = 0;
+    bestAnyStart.QuadPart = 0;
 
     if (!ResourceList || !PhysicalAddress || !Length)
         return FALSE;
@@ -78,23 +573,38 @@ RxgkpFindLikelyFramebufferResource(
             if (desc->Type != CmResourceTypeMemory)
                 continue;
 
-            /* Heuristic: framebuffer apertures are typically marked prefetchable. */
-            if ((desc->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) == 0)
-                continue;
-
-            if (desc->u.Memory.Length > bestLength)
+            /* Track largest memory range overall. */
+            if (desc->u.Memory.Length > bestAnyLength)
             {
-                bestLength = desc->u.Memory.Length;
-                bestStart = desc->u.Memory.Start;
+                bestAnyLength = desc->u.Memory.Length;
+                bestAnyStart = desc->u.Memory.Start;
+            }
+
+            /*
+             * Prefer prefetchable apertures when available, but do not require it.
+             * Some virtual adapters (incl. VBox) may not mark the VRAM BAR prefetchable.
+             */
+            if ((desc->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) &&
+                (desc->u.Memory.Length > bestPrefetchLength))
+            {
+                bestPrefetchLength = desc->u.Memory.Length;
+                bestPrefetchStart = desc->u.Memory.Start;
             }
         }
     }
 
-    if (!bestLength)
+    if (bestPrefetchLength)
+    {
+        *PhysicalAddress = bestPrefetchStart;
+        *Length = bestPrefetchLength;
+        return TRUE;
+    }
+
+    if (!bestAnyLength)
         return FALSE;
 
-    *PhysicalAddress = bestStart;
-    *Length = bestLength;
+    *PhysicalAddress = bestAnyStart;
+    *Length = bestAnyLength;
     return TRUE;
 }
 
@@ -293,6 +803,34 @@ DxgkrnlSetupResourceList(_Inout_ PCM_RESOURCE_LIST* ResourceList)
     if (!RxgkDriverExtension || !ResourceList)
         return STATUS_INVALID_PARAMETER;
 
+    /* Preferred path: use PnP-provided translated resources captured at START_DEVICE. */
+    if (RxgkDriverExtension->AllocatedResourcesTranslated)
+    {
+        *ResourceList = RxgkDriverExtension->AllocatedResourcesTranslated;
+
+        /*
+         * PnP may hand us a translated list with a zero-start I/O port BAR (bring-up).
+         * Try to recover it from PCI config, since VBox SVGA register access depends on it.
+         */
+        if (RxgkDriverExtension->MiniportPdo != NULL)
+        {
+            PciSlotNumber.u.AsULONG = RxgkDriverExtension->SystemIoSlotNumber;
+            ReturnedLength = HalGetBusData(PCIConfiguration,
+                                           RxgkDriverExtension->SystemIoBusNumber,
+                                           PciSlotNumber.u.AsULONG,
+                                           &Config,
+                                           sizeof(Config));
+            if (ReturnedLength == sizeof(Config))
+            {
+                RxgkpFixupZeroPortBarFromPciConfig(*ResourceList, &Config);
+            }
+        }
+
+        RxgkpNormalizeResourceListForMiniports(*ResourceList);
+        DPRINT1("DxgkrnlSetupResourceList: using cached AllocatedResourcesTranslated %p\n", *ResourceList);
+        return STATUS_SUCCESS;
+    }
+
     PciSlotNumber.u.AsULONG = RxgkDriverExtension->SystemIoSlotNumber;
 
 
@@ -325,6 +863,9 @@ DxgkrnlSetupResourceList(_Inout_ PCM_RESOURCE_LIST* ResourceList)
            DPRINT1("HalAssignSlotResources failed with status %x.\n",Status);
            return Status;
        }
+
+       /* Normalize descriptor ordering for miniports that expect VRAM first. */
+       RxgkpNormalizeResourceListForMiniports(*ResourceList);
     }
     else
     {
@@ -425,6 +966,8 @@ RxgkCbAcquirePostDisplayOwnership(
     _Out_ PDXGK_DISPLAY_INFORMATION DisplayInfo)
 {
     PCM_RESOURCE_LIST tempResourceList;
+    PHYSICAL_ADDRESS fbStart;
+    ULONG fbLength;
     BOOLEAN doVbeAttempt;
 
     if (KeGetCurrentIrql() > APC_LEVEL)
@@ -460,7 +1003,7 @@ RxgkCbAcquirePostDisplayOwnership(
     if (doVbeAttempt && (KeGetCurrentIrql() == PASSIVE_LEVEL))
     {
         /* Best-effort; on success this updates g_PostDisplayInfoPlusEdid via RxgkPostDisplaySetDisplayInfo. */
-        (void)RxgkPostDisplayProgramVbeAndCache(DeviceHandle);
+      //  (void)RxgkPostDisplayProgramVbeAndCache(DeviceHandle);
     }
 
     /* Prefer the cached translated resources from DxgkCbGetDeviceInformation. */
@@ -476,15 +1019,53 @@ RxgkCbAcquirePostDisplayOwnership(
         RxgkpEnsurePostDisplayInfoInitialized(tempResourceList);
     }
 
+    fbStart.QuadPart = 0;
+    fbLength = 0;
+    if (g_CachedTranslatedResourceList)
+    {
+        (VOID)RxgkpFindLikelyFramebufferResource(g_CachedTranslatedResourceList, &fbStart, &fbLength);
+    }
+    else if (tempResourceList)
+    {
+        (VOID)RxgkpFindLikelyFramebufferResource(tempResourceList, &fbStart, &fbLength);
+    }
+
     ExAcquireFastMutex(&g_PostDisplayMutex);
     if (g_PostDisplayInfoValid && DeviceHandle == g_PostDeviceHandle)
     {
         *DisplayInfo = g_PostDisplayInfoPlusEdid.DisplayInfo;
+
+        /*
+         * Safety: if we couldn't determine a plausible framebuffer BAR (or the
+         * cached PhysicAddress doesn't fall inside it), force "unknown" so
+         * miniports fall back to their own VRAM base. This avoids VBox asserting
+         * when PhysicAddress is below phVRAM.
+         */
+        if (fbLength == 0 ||
+            DisplayInfo->PhysicAddress.QuadPart == 0)
+        {
+            DisplayInfo->Width = 0;
+        }
+        else
+        {
+            ULONGLONG start = fbStart.QuadPart;
+            ULONGLONG end = start + (ULONGLONG)fbLength;
+            ULONGLONG addr = DisplayInfo->PhysicAddress.QuadPart;
+            if (end < start || addr < start || addr >= end)
+            {
+                DisplayInfo->Width = 0;
+            }
+        }
     }
     else
     {
+        /*
+         * Per WDDM contract, Width==0 indicates the OS doesn't have POST display info.
+         * Many miniports (including VBoxWddm) treat this as a valid "unknown" result and
+         * will fall back to their own defaults.
+         */
         RtlZeroMemory(DisplayInfo, sizeof(*DisplayInfo));
-        DisplayInfo->TargetId = (D3DDDI_VIDEO_PRESENT_TARGET_ID)-1;
+        DisplayInfo->Width = 0;
     }
     ExReleaseFastMutex(&g_PostDisplayMutex);
 
@@ -571,60 +1152,170 @@ RxgkCbMapMemory(_In_ HANDLE DeviceHandle,
                 _In_ MEMORY_CACHING_TYPE CacheType,
                 _Outptr_ PVOID *VirtualAddress)
 {
-   NTSTATUS Status;
-       ULONG AddressSpace = InIoSpace;
+    NTSTATUS Status;
+    ULONG AddressSpace;
     PHYSICAL_ADDRESS CompleteAddress;
-    if (HalTranslateBusAddress(
-          RxgkDriverExtension->AdapterInterfaceType,
-          RxgkDriverExtension->SystemIoBusNumber,
-          TranslatedAddress,
-          &AddressSpace,
-          &CompleteAddress) == FALSE)
-   {
-        __debugbreak();
 
-      return NULL;
-   }
+    UNREFERENCED_PARAMETER(DeviceHandle);
 
-    DPRINT1("DxgkCbMapMemory Entry\n");
-    if (InIoSpace == TRUE)
+    if (!VirtualAddress || !RxgkDriverExtension)
+        return STATUS_INVALID_PARAMETER;
+
+    *VirtualAddress = NULL;
+    RxgkpEnsureMappedRangeListInitialized();
+
+    if (Length == 0)
     {
-        DPRINT1("Mapping InIoSpace\n");
-        *VirtualAddress = (PVOID)(ULONG_PTR)CompleteAddress.LowPart;
+        DPRINT1("DxgkCbMapMemory: refusing zero mapping (PA=%I64x Len=%lu)\n",
+                TranslatedAddress.QuadPart, Length);
+        return STATUS_INVALID_PARAMETER;
     }
-    else if(MapToUserMode)
+
+    if (TranslatedAddress.QuadPart == 0 &&
+        !InIoSpace &&
+        !MapToUserMode &&
+        RxgkDriverExtension &&
+        RxgkDriverExtension->AllocatedResourcesTranslated)
     {
+        static volatile LONG s_DumpedZeroMapOnce = 0;
+        if (InterlockedCompareExchange(&s_DumpedZeroMapOnce, 1, 0) == 0)
+        {
+            DPRINT1("DxgkCbMapMemory: PA==0 with Len=%lu; cached resources %p\n",
+                    Length, RxgkDriverExtension->AllocatedResourcesTranslated);
+            RxgkpDumpResourceListSummary(RxgkDriverExtension->AllocatedResourcesTranslated);
+        }
 
-                    /* Map to userspace */
-                Status = MapPhysicalMemory((HANDLE)0xFFFFFFFFFFFFFFFF,
-                               CompleteAddress,
-                               Length,
-                               PAGE_READWRITE/* | PAGE_WRITECOMBINE*/,
-                               VirtualAddress);
+        ULONGLONG inferred = RxgkpInferMissingBarBaseFromCachedResources(RxgkDriverExtension->AllocatedResourcesTranslated,
+                                                                         Length);
+        if (!inferred)
+        {
+            inferred = RxgkpInferMissingBarBaseFromRecentMappings(Length);
+        }
 
-        if (!NT_SUCCESS(Status))
-         {
-            DPRINT1("DxgkCbMapMemory: MapPhysicalMemory() failed! (0x%x)\n", Status);
-            *VirtualAddress =  NULL;
-            return Status;
-         }
-
+        if (inferred)
+        {
+            DPRINT1("DxgkCbMapMemory: inferring missing BAR base %I64x for Len=%lu\n", inferred, Length);
+            TranslatedAddress.QuadPart = inferred;
+        }
+        else
+        {
+            DPRINT1("DxgkCbMapMemory: refusing zero mapping (PA=0 Len=%lu) - could not infer base\n", Length);
+            return STATUS_INVALID_PARAMETER;
+        }
     }
-    else
-    {
-        *VirtualAddress = MmMapIoSpace(CompleteAddress, Length, CacheType);
-    }
-    
 
-    if (*VirtualAddress == NULL)
+    /*
+     * HalTranslateBusAddress returns a translated address and may also
+     * adjust the AddressSpace (0 = memory space, 1 = I/O port space).
+     */
+    AddressSpace = InIoSpace ? 1 : 0;
+    if (HalTranslateBusAddress(RxgkDriverExtension->AdapterInterfaceType,
+                               RxgkDriverExtension->SystemIoBusNumber,
+                               TranslatedAddress,
+                               &AddressSpace,
+                               &CompleteAddress) == FALSE)
     {
-        DPRINT1("VirtualAddress is still NULL - reverting to fallback\n");
-        //* final fallback
-          *VirtualAddress = (PVOID)(ULONG_PTR)CompleteAddress.LowPart;
+        DPRINT1("DxgkCbMapMemory: HalTranslateBusAddress failed (InIoSpace=%u, PA=%I64x)\n",
+                InIoSpace, TranslatedAddress.QuadPart);
+        return STATUS_INVALID_ADDRESS;
+    }
+
+    DPRINT1("DxgkCbMapMemory: Entry InIoSpace=%u AddressSpace=%lu PA=%I64x Len=%lu User=%u Cache=%d\n",
+            InIoSpace, AddressSpace, CompleteAddress.QuadPart, Length, MapToUserMode, (int)CacheType);
+
+    if (AddressSpace != 0)
+    {
+        /*
+         * I/O port space: return the port base address as an opaque pointer.
+         * Callers must use READ/WRITE_PORT_* APIs with this value.
+         */
+        *VirtualAddress = (PVOID)(ULONG_PTR)CompleteAddress.QuadPart;
         return STATUS_SUCCESS;
     }
-    DPRINT1("DxgkCbMapMemory Exit\n");
+
+    if (MapToUserMode)
+    {
+        /* Map to user space (rare for miniports; keep existing helper). */
+        Status = MapPhysicalMemory((HANDLE)0xFFFFFFFFFFFFFFFF,
+                                  CompleteAddress,
+                                  Length,
+                                  PAGE_READWRITE /* | PAGE_WRITECOMBINE */,
+                                  VirtualAddress);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("DxgkCbMapMemory: MapPhysicalMemory failed (0x%x)\n", Status);
+            *VirtualAddress = NULL;
+            return Status;
+        }
+        RxgkpTrackMappedRange(*VirtualAddress,
+                              (SIZE_T)Length,
+                              RxgkMapKindUserSection,
+                              (HANDLE)0xFFFFFFFFFFFFFFFF);
+        return STATUS_SUCCESS;
+    }
+
+    *VirtualAddress = MmMapIoSpace(CompleteAddress, Length, CacheType);
+    if (!*VirtualAddress)
+    {
+        DPRINT1("DxgkCbMapMemory: MmMapIoSpace failed (PA=%I64x Len=%lu)\n",
+                CompleteAddress.QuadPart, Length);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RxgkpTrackMappedRange(*VirtualAddress,
+                          (SIZE_T)Length,
+                          RxgkMapKindMmIoSpace,
+                          NULL);
+
+    /*
+     * Track recent small MMIO mappings to help recover from broken BAR assignment
+     * where the miniport later passes PA=0 for a known-sized window (e.g. FIFO).
+     * Keep only sub-16MB mappings to avoid polluting the list with VRAM apertures.
+     */
+    if (!InIoSpace && !MapToUserMode && CompleteAddress.QuadPart != 0 && Length != 0 && Length < (16 * 1024 * 1024))
+    {
+        LONG idx = InterlockedIncrement(&g_RxgkRecentMapIndex) - 1;
+        g_RxgkRecentMapPhys[idx & 7] = CompleteAddress.QuadPart;
+    }
+
+    DPRINT1("DxgkCbMapMemory: Exit VA=%p\n", *VirtualAddress);
     return STATUS_SUCCESS;
+}
+
+static
+ULONGLONG
+RxgkpInferMissingBarBaseFromRecentMappings(
+    _In_ ULONG Length)
+{
+    if (Length == 0)
+        return 0;
+
+    ULONGLONG min = 0;
+    for (int i = 0; i < 8; ++i)
+    {
+        ULONGLONG v = g_RxgkRecentMapPhys[i];
+        if (!v)
+            continue;
+        if (min == 0 || v < min)
+            min = v;
+    }
+
+    if (!min)
+        return 0;
+
+    ULONGLONG len = (ULONGLONG)Length;
+    ULONGLONG base = min;
+    if ((len & (len - 1)) == 0)
+        base &= ~(len - 1);
+    else
+        base &= ~((ULONGLONG)PAGE_SIZE - 1);
+
+    if (!base)
+        return 0;
+
+    DPRINT1("DxgkCbMapMemory: inferred base from recent maps min=%I64x len=%lu -> base=%I64x\n",
+            min, Length, base);
+    return base;
 }
 
 
@@ -690,8 +1381,39 @@ APIENTRY
 RxgkCbUnmapMemory(_In_ HANDLE DeviceHandle,
                        _In_ PVOID VirtualAddress)
 {
-    //TODO: Implement meh
-    UNIMPLEMENTED;
+    PRXGK_MAPPED_RANGE range;
+
+    UNREFERENCED_PARAMETER(DeviceHandle);
+
+    if (!VirtualAddress)
+        return STATUS_INVALID_PARAMETER;
+
+    RxgkpEnsureMappedRangeListInitialized();
+
+    range = RxgkpUnlinkMappedRangeByVa(VirtualAddress);
+    if (!range)
+    {
+        /*
+         * Be permissive to match Windows' robustness and to avoid hard-failing
+         * miniports that unmap ranges we didn't track (e.g. I/O port addresses).
+         */
+        DPRINT1("DxgkCbUnmapMemory: VA %p not tracked\n", VirtualAddress);
+        return STATUS_SUCCESS;
+    }
+
+    switch (range->Kind)
+    {
+        case RxgkMapKindMmIoSpace:
+            MmUnmapIoSpace(VirtualAddress, range->Length);
+            break;
+        case RxgkMapKindUserSection:
+            (VOID)ZwUnmapViewOfSection(range->Process, VirtualAddress);
+            break;
+        default:
+            break;
+    }
+
+    ExFreePoolWithTag(range, 'gMxR');
     return STATUS_SUCCESS;
 }
 
@@ -775,11 +1497,55 @@ RxgkCbSynchronizeExecution(_In_ HANDLE DeviceHandle,
                            _In_ ULONG MessageNumber,
                            _Out_ PBOOLEAN ReturnValue)
 {
-    DPRINT1("RxgkCbSynchronizeExecution: ENtry\n");
-    *ReturnValue = KeSynchronizeExecution(RxgkDriverExtension->InterruptObject, SynchronizeRoutine, Context);
-    return STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(DeviceHandle);
+    UNREFERENCED_PARAMETER(MessageNumber);
 
+    if (!ReturnValue)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
+    *ReturnValue = FALSE;
+
+    if (!RxgkDriverExtension || !SynchronizeRoutine)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * On real systems dxgkrnl typically synchronizes against the miniport's
+     * interrupt object. During bring-up (or for devices without a connected
+     * interrupt) we may not have an InterruptObject yet; do a best-effort
+     * serialization fallback rather than crashing.
+     */
+    if (RxgkDriverExtension->InterruptObject)
+    {
+        *ReturnValue = KeSynchronizeExecution(RxgkDriverExtension->InterruptObject,
+                                             SynchronizeRoutine,
+                                             Context);
+        return STATUS_SUCCESS;
+    }
+
+    {
+        KIRQL OldIrql;
+        BOOLEAN LocalRet;
+
+        if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+        {
+            KeAcquireSpinLockAtDpcLevel(&RxgkDriverExtension->InterruptSpinLock);
+            LocalRet = SynchronizeRoutine(Context);
+            KeReleaseSpinLockFromDpcLevel(&RxgkDriverExtension->InterruptSpinLock);
+        }
+        else
+        {
+            KeAcquireSpinLock(&RxgkDriverExtension->InterruptSpinLock, &OldIrql);
+            LocalRet = SynchronizeRoutine(Context);
+            KeReleaseSpinLock(&RxgkDriverExtension->InterruptSpinLock, OldIrql);
+        }
+
+        *ReturnValue = LocalRet;
+        return STATUS_SUCCESS;
+    }
 }
 
 
@@ -901,7 +1667,7 @@ RxgkpSetupDxgkrnl(
 {
     DXGKRNL_INTERFACE DxgkrnlInterfaceLoc = {0};
     DxgkrnlInterface.Size = sizeof(DXGKRNL_INTERFACE);
-    DxgkrnlInterface.Version = DXGKDDI_INTERFACE_VERSION_WIN8;
+    DxgkrnlInterface.Version = DXGKDDI_INTERFACE_VERSION_VISTA_SP1;
     DxgkrnlInterface.DeviceHandle = (HANDLE)DriverObject;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
     DxgkrnlInterface.DxgkCbAcquirePostDisplayOwnership = RxgkCbAcquirePostDisplayOwnership;
@@ -930,4 +1696,5 @@ RxgkpSetupDxgkrnl(
     DPRINT1("Targetting version: %X\n", DxgkrnlInterface.Version);
     return STATUS_SUCCESS;
 }
+
 

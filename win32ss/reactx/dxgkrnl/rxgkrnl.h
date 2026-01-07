@@ -34,6 +34,15 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     ULONG SystemIoBusNumber; // ACPI or PCI Currently
     ULONG SystemIoSlotNumber; // ACPI or PCI Currently
     KDPC DpcObject;
+
+    /*
+     * PnP-provided translated resources captured at IRP_MN_START_DEVICE.
+     * Windows dxgkrnl keeps a pointer to the translated CM_RESOURCE_LIST in its
+     * device context and returns it in DxgkCbGetDeviceInformation; it does not
+     * recompute resources on-demand.
+     */
+    PCM_RESOURCE_LIST AllocatedResourcesTranslated;
+    ULONG AllocatedResourcesTranslatedSize;
     // Driver PFNs
     ULONG                                    Version;
     PDXGKDDI_ADD_DEVICE                      DxgkDdiAddDevice;
@@ -50,9 +59,7 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PDXGKDDI_SETVIDPNSOURCEADDRESS           DxgkDdiSetVidPnSourceAddress;
     PDXGKDDI_SETVIDPNSOURCEVISIBILITY        DxgkDdiSetVidPnSourceVisibility;
     PDXGKDDI_UPDATEACTIVEVIDPNPRESENTPATH    DxgkDdiUpdateActiveVidPnPresentPath;
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-    PDXGKDDI_PRESENTDISPLAYONLY              DxgkDdiPresentDisplayOnly;
-#endif
+    PDXGKDDI_ESCAPE                          DxgkDdiEscape;
     PDXGKDDI_CREATEDEVICE                    DxgkDdiCreateDevice;
     PDXGKDDI_CREATEALLOCATION                DxgkDdiCreateAllocation;
     // BUS

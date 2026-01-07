@@ -14,6 +14,7 @@
 
 static REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkCallbacks;
 static BOOLEAN g_DxgkCallbacksValid = FALSE;
+static LONG g_CddDbgPresentCalls = 0;
 
 static
 BOOL
@@ -64,6 +65,80 @@ CddEnsureDxgkCallbacks(VOID)
 
    g_DxgkCallbacksValid = TRUE;
    return TRUE;
+}
+
+BOOL
+APIENTRY
+CddPresent(_In_ DHPDEV dhpdev,
+           _In_opt_ const RECTL* prcl)
+{
+   PCDDPDEV ppdev = (PCDDPDEV)dhpdev;
+   D3DKMT_PRESENT Args;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+   D3DKMT_PRESENT_RGNS Regions;
+   RECT Dirty;
+#endif
+   NTSTATUS Status;
+   LONG n;
+
+   if (!ppdev)
+      return FALSE;
+
+   if (!CddEnsureDxgkCallbacks())
+      return FALSE;
+
+   if (!g_DxgkCallbacks.RxgkIntPfnPresent)
+      return FALSE;
+
+   n = InterlockedIncrement(&g_CddDbgPresentCalls);
+   if (n <= 20)
+   {
+      DPRINT1("cdd: CddPresent #%ld: Present=%p DxgkVerMacro=0x%X\n",
+              n,
+              g_DxgkCallbacks.RxgkIntPfnPresent,
+              (UINT)DXGKDDI_INTERFACE_VERSION);
+   }
+
+   RtlZeroMemory(&Args, sizeof(Args));
+   Args.hDevice = 0;
+   Args.VidPnSourceId = 0;
+   Args.hSource = 0; /* Bring-up: dxgkrnl present ignores hSource currently */
+   Args.hDestination = 0;
+   Args.Color = 0;   /* Not used by our dxgkrnl present once wired to framebuffer */
+
+   if (prcl)
+   {
+      Args.DstRect.left   = prcl->left;
+      Args.DstRect.top    = prcl->top;
+      Args.DstRect.right  = prcl->right;
+      Args.DstRect.bottom = prcl->bottom;
+   }
+   else
+   {
+      Args.DstRect.left = 0;
+      Args.DstRect.top = 0;
+      Args.DstRect.right = (LONG)ppdev->ScreenWidth;
+      Args.DstRect.bottom = (LONG)ppdev->ScreenHeight;
+   }
+
+   Args.SrcRect = Args.DstRect;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+   Dirty = Args.DstRect;
+   Regions.DirtyRectCount = 1;
+   Regions.pDirtyRects = &Dirty;
+   Regions.MoveRectCount = 0;
+   Regions.pMoveRects = NULL;
+   Args.pPresentRegions = &Regions;
+#else
+   if (n <= 20)
+      DPRINT1("cdd: CddPresent: DXGKDDI_INTERFACE_VERSION < WIN8; pPresentRegions not available\n");
+#endif
+
+   Status = g_DxgkCallbacks.RxgkIntPfnPresent(&Args);
+   if (n <= 20)
+      DPRINT1("cdd: CddPresent: RxgkIntPfnPresent -> 0x%08X\n", Status);
+   return NT_SUCCESS(Status);
 }
 
 static
@@ -756,7 +831,18 @@ DrvEnableSurface(
     * Associate the surface with our device.
     */
 
-   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, 0))
+   /*
+    * Tell GDI which DDI hooks we implement. If we pass 0 here, GDI will never
+    * call DrvBitBlt/DrvCopyBits/etc, and we won't get a chance to notify the
+    * miniport about updated regions.
+    */
+   if (!EngAssociateSurface(hSurface, ppdev->hDevEng,
+                            HOOK_BITBLT |
+                            HOOK_COPYBITS |
+                            HOOK_TEXTOUT |
+                            HOOK_STROKEPATH |
+                            HOOK_TRANSPARENTBLT |
+                            HOOK_SYNCHRONIZE))
    {
       EngDeleteSurface(hSurface);
       return NULL;

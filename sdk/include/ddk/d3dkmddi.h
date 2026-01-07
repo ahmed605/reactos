@@ -85,6 +85,27 @@ typedef DXGKDDI_PRESENTDISPLAYONLY *PDXGKDDI_PRESENTDISPLAYONLY;
 
 #endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 
+typedef struct _DXGKARG_ESCAPE
+{
+    HANDLE            hDevice;
+    D3DDDI_ESCAPEFLAGS Flags;
+    VOID*             pPrivateDriverData;
+    UINT              PrivateDriverDataSize;
+    HANDLE            hContext;
+    HANDLE            hKmdProcessHandle;
+} DXGKARG_ESCAPE, *PDXGKARG_ESCAPE;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_ESCAPE(
+    _In_ const HANDLE hAdapter,
+    _In_ const DXGKARG_ESCAPE* pEscape
+    );
+
+typedef DXGKDDI_ESCAPE *PDXGKDDI_ESCAPE;
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
 typedef struct _DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO2 DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO2;
 #endif
@@ -1850,7 +1871,7 @@ NTSTATUS
     );
 typedef UINT32 *PDXGKDDI_RESETFROMTIMEOUT;
 typedef UINT32 *PDXGKDDI_RESTARTFROMTIMEOUT;
-typedef UINT32 *PDXGKDDI_ESCAPE;
+/* PDXGKDDI_ESCAPE is defined above as a real function pointer type. */
 typedef UINT32 *PDXGKDDI_COLLECTDBGINFO;
 typedef UINT32 *PDXGKDDI_QUERYCURRENTFENCE;
 typedef
