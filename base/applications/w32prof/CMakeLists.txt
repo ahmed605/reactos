@@ -22,6 +22,11 @@ list(APPEND SOURCE
     test_d3d9.c
     test_d3d9_textured.c
     test_d3d9_textured_fs.c
+    test_d3d10.c
+    test_d3d10_clear.c
+    test_d3d10_triangle.c
+    test_d3d10_triangle_shader.c
+    test_d3d10_cube.c
     test_gl11.c
     test_gl11_textured.c
     test_gl11_textured_fs.c
@@ -37,8 +42,10 @@ list(APPEND SOURCE
 add_rc_deps(w32prof.rc ${CMAKE_CURRENT_SOURCE_DIR}/logo_test.tga)
 
 add_executable(w32prof ${SOURCE} w32prof.rc)
+target_link_libraries(w32prof wine dx10guid dxguid uuid)
+
 set_module_type(w32prof win32gui UNICODE)
-add_importlibs(w32prof user32 gdi32 advapi32 comctl32 opengl32 ddraw d3d8 d3d9 msvcrt kernel32)
+add_importlibs(w32prof user32 gdi32 advapi32 comctl32 opengl32 ddraw d3d8 d3d9 d3d10 dxgi d3dcompiler_43 msvcrt kernel32)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(w32prof PRIVATE -Wno-error)

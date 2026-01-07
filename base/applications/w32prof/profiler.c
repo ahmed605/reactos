@@ -34,6 +34,11 @@ static const W32PROF_TEST_ENTRY g_Tests[] =
     { W32PROF_TEST_D3D7_CUBE,     TEXT("Direct3D7 Cube"),     TEXT("Create D3D7 device and render a spinning cube") },
     { W32PROF_TEST_D3D8_CUBE,     TEXT("Direct3D8 Cube"),     TEXT("Create D3D8 device and render a spinning cube") },
     { W32PROF_TEST_D3D9_CUBE,     TEXT("Direct3D9 Cube"),    TEXT("Create D3D9 device and render a spinning cube") },
+    { W32PROF_TEST_D3D10_DISPLAY_QUERY, TEXT("Direct3D10 Display Query"), TEXT("Query D3D10 adapters and display information") },
+    { W32PROF_TEST_D3D10_CLEAR,   TEXT("Direct3D10 Clear"),  TEXT("Create D3D10 device, open window and clear screen") },
+    { W32PROF_TEST_D3D10_TRIANGLE, TEXT("Direct3D10 Triangle"), TEXT("D3D10 triangle with minimal shader") },
+    { W32PROF_TEST_D3D10_TRIANGLE_SHADER, TEXT("Direct3D10 Triangle Shader"), TEXT("D3D10 triangle with transformation shader") },
+    { W32PROF_TEST_D3D10_CUBE,     TEXT("Direct3D10 Cube"),  TEXT("D3D10 spinning cube with shader") },
     { W32PROF_TEST_GL11_CUBE,     TEXT("OpenGL 1.1 Cube"),   TEXT("Create WGL context (fixed pipeline) and render a spinning cube") },
     { W32PROF_TEST_GL20_CUBE,     TEXT("OpenGL 2.0 Cube"),   TEXT("Create WGL context + GLSL program and render a spinning cube") },
     { W32PROF_TEST_GL42_CUBE,     TEXT("OpenGL 4.2 Cube"),   TEXT("Create a 4.2 context (best-effort) and render a spinning cube") },
@@ -699,6 +704,11 @@ RunTestBody(const ProfilerConfig* cfg, W32PROF_TEST_ID id, LONGLONG freq)
             W32Prof_Test_D3D7Cube(cfg);
             W32Prof_Test_D3D8Cube(cfg);
             W32Prof_Test_D3D9Cube(cfg);
+            W32Prof_Test_D3D10DisplayQuery(cfg);
+            W32Prof_Test_D3D10Clear(cfg);
+            W32Prof_Test_D3D10Triangle(cfg);
+            W32Prof_Test_D3D10TriangleShader(cfg);
+            W32Prof_Test_D3D10Cube(cfg);
             W32Prof_Test_GL11Cube(cfg);
             W32Prof_Test_GL20Cube(cfg);
             W32Prof_Test_GL42Cube(cfg);
@@ -809,6 +819,26 @@ RunTestBody(const ProfilerConfig* cfg, W32PROF_TEST_ID id, LONGLONG freq)
 
         case W32PROF_TEST_D3D9_CUBE:
             W32Prof_Test_D3D9Cube(cfg);
+            break;
+
+        case W32PROF_TEST_D3D10_DISPLAY_QUERY:
+            W32Prof_Test_D3D10DisplayQuery(cfg);
+            break;
+
+        case W32PROF_TEST_D3D10_CLEAR:
+            W32Prof_Test_D3D10Clear(cfg);
+            break;
+
+        case W32PROF_TEST_D3D10_TRIANGLE:
+            W32Prof_Test_D3D10Triangle(cfg);
+            break;
+
+        case W32PROF_TEST_D3D10_TRIANGLE_SHADER:
+            W32Prof_Test_D3D10TriangleShader(cfg);
+            break;
+
+        case W32PROF_TEST_D3D10_CUBE:
+            W32Prof_Test_D3D10Cube(cfg);
             break;
 
         case W32PROF_TEST_GL11_CUBE:

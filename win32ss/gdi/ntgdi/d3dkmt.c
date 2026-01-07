@@ -115,6 +115,7 @@ BOOLEAN
 APIENTRY
 NtGdiDdDDICheckExclusiveOwnership(VOID)
 {
+    DPRINT1("D3DKmtCheckExclusiveOwnership: Entry\n");
     // We don't support DWM at this time, excusive ownership is always false.
     return FALSE;
 }
@@ -124,6 +125,7 @@ APIENTRY
 NtGdiDdDDIGetProcessSchedulingPriorityClass(_In_  HANDLE unnamedParam1,
                                             _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *unnamedParam2)
 {
+    DPRINT1("D3DKmtGetProcessSchedulingPriorityClass: ProcessHandle=0x%p, PriorityClass=%p\n", unnamedParam1, unnamedParam2);
     return 1;
 }
 
@@ -132,6 +134,7 @@ APIENTRY
 NtGdiDdDDISetProcessSchedulingPriorityClass(_In_ HANDLE unnamedParam1,
                                             _In_ D3DKMT_SCHEDULINGPRIORITYCLASS unnamedParam2)
 {
+    DPRINT1("D3DKmtSetProcessSchedulingPriorityClass: ProcessHandle=0x%p, PriorityClass=%d\n", unnamedParam1, unnamedParam2);
     return 1;
 }
 
@@ -139,6 +142,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISharedPrimaryLockNotification(_In_ const D3DKMT_SHAREDPRIMARYLOCKNOTIFICATION* unnamedParam1)
 {
+    DPRINT1("D3DKmtSharedPrimaryLockNotification: pData=%p\n", unnamedParam1);
     return 1;
 }
 
@@ -146,6 +150,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISharedPrimaryUnLockNotification(_In_ const D3DKMT_SHAREDPRIMARYUNLOCKNOTIFICATION* unnamedParam1)
 {
+    DPRINT1("D3DKmtSharedPrimaryUnLockNotification: pData=%p\n", unnamedParam1);
     return 1;
 }
 
@@ -153,6 +158,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME* unnamedParam1)
 {
+    DPRINT1("D3DKmtOpenAdapterFromGdiDisplayName: pData=%p\n", unnamedParam1);
    return 0;
 }
 
@@ -160,6 +166,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromHdc(_Inout_ D3DKMT_OPENADAPTERFROMHDC* unnamedParam1)
 {
+    DPRINT1("D3DKmtOpenAdapterFromHdc: pData=%p\n", unnamedParam1);
     return STATUS_PROCEDURE_NOT_FOUND;
 }
 
@@ -168,6 +175,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromDeviceName(_Inout_ D3DKMT_OPENADAPTERFROMDEVICENAME* unnamedParam1)
 {
+    DPRINT1("D3DKmtOpenAdapterFromDeviceName: pData=%p\n", unnamedParam1);
     return 0;
 }
 
@@ -176,6 +184,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromLuid(_Inout_ const D3DKMT_OPENADAPTERFROMLUID *unnamedParam1)
 {
+    DPRINT1("D3DKmtOpenAdapterFromLuid: pData=%p\n", unnamedParam1);
     return 0;
 }
 
@@ -183,6 +192,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdQueryVideoMemoryInfo(_Inout_ D3DKMT_QUERYVIDEOMEMORYINFO *unnamedParam1)
 {
+    DPRINT1("D3DKmtQueryVideoMemoryInfo: pData=%p\n", unnamedParam1);
     return 0;
 }
 
@@ -201,6 +211,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateAllocation(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1)
 {
+    DPRINT1("D3DKmtCreateAllocation: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -214,6 +225,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICheckMonitorPowerState(_In_ const D3DKMT_CHECKMONITORPOWERSTATE* unnamedParam1)
 {
+    DPRINT1("D3DKmtCheckMonitorPowerState: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -227,6 +239,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICheckOcclusion(_In_ const D3DKMT_CHECKOCCLUSION* unnamedParam1)
 {
+    DPRINT1("D3DKmtCheckOcclusion: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -241,6 +254,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICloseAdapter(_In_ const D3DKMT_CLOSEADAPTER* unnamedParam1)
 {
+    DPRINT1("D3DKmtCloseAdapter: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -254,6 +268,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateContext(_Inout_ D3DKMT_CREATECONTEXT* unnamedParam1)
 {
+    DPRINT1("D3DKmtCreateContext: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -267,6 +282,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateDevice(_Inout_ D3DKMT_CREATEDEVICE* unnamedParam1)
 {
+    DPRINT1("D3DKmtCreateDevice: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -280,6 +296,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateOverlay(_Inout_ D3DKMT_CREATEOVERLAY* unnamedParam1)
 {
+    DPRINT1("D3DKmtCreateOverlay: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -293,6 +310,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateSynchronizationObject(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT* unnamedParam1)
 {
+    DPRINT1("D3DKmtCreateSynchronizationObject: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -306,6 +324,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyAllocation(_In_ const D3DKMT_DESTROYALLOCATION* unnamedParam1)
 {
+    DPRINT1("D3DKmtDestroyAllocation: pData=%p\n", unnamedParam1);
   if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -319,6 +338,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyContext(_In_ const D3DKMT_DESTROYCONTEXT* unnamedParam1)
 {
+    DPRINT1("D3DKmtDestroyContext: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -332,6 +352,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyDevice(_In_ const D3DKMT_DESTROYDEVICE* unnamedParam1)
 {
+    DPRINT1("D3DKmtDestroyDevice: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -345,6 +366,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyOverlay(_In_ const D3DKMT_DESTROYOVERLAY* unnamedParam1)
 {
+    DPRINT1("D3DKmtDestroyOverlay: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -358,6 +380,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroySynchronizationObject(_In_ const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
+    DPRINT1("D3DKmtDestroySynchronizationObject: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -371,6 +394,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIEscape(_In_ const D3DKMT_ESCAPE* unnamedParam1)
 {
+    DPRINT1("D3DKmtEscape: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -384,6 +408,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIFlipOverlay(_In_ const D3DKMT_FLIPOVERLAY* unnamedParam1)
 {
+    DPRINT1("D3DKmtFlipOverlay: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -397,6 +422,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetContextSchedulingPriority(_Inout_ D3DKMT_GETCONTEXTSCHEDULINGPRIORITY* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetContextSchedulingPriority: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -410,6 +436,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetDeviceState(_Inout_ D3DKMT_GETDEVICESTATE* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetDeviceState: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -423,6 +450,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetDisplayModeList: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -436,6 +464,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetMultisampleMethodList: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -449,6 +478,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetPresentHistory(_Inout_ D3DKMT_GETPRESENTHISTORY* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetPresentHistory: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -462,6 +492,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetRuntimeData(_In_ const D3DKMT_GETRUNTIMEDATA* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetRuntimeData: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -475,6 +506,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetScanLine(_In_ D3DKMT_GETSCANLINE* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetScanLine: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -488,6 +520,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1)
 {
+    DPRINT1("D3DKmtGetSharedPrimaryHandle: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -501,6 +534,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIInvalidateActiveVidPn(_In_ const D3DKMT_INVALIDATEACTIVEVIDPN* unnamedParam1)
 {
+    DPRINT1("D3DKmtInvalidateActiveVidPn: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -514,6 +548,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDILock(_Inout_ D3DKMT_LOCK* unnamedParam1)
 {
+    DPRINT1("D3DKmtLock: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -527,6 +562,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenResource(_Inout_ D3DKMT_OPENRESOURCE* unnamedParam1)
 {
+    DPRINT1("D3DKmtOpenResource: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -540,6 +576,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIPollDisplayChildren(_In_ const D3DKMT_POLLDISPLAYCHILDREN* unnamedParam1)
 {
+    DPRINT1("D3DKmtPollDisplayChildren: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -553,6 +590,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
 {
+    DPRINT1("D3DKmtPresent: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -566,6 +604,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* unnamedParam1)
 {
+    DPRINT1("D3DKmtQueryAdapterInfo: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -579,6 +618,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryAllocationResidency(_In_ const D3DKMT_QUERYALLOCATIONRESIDENCY* unnamedParam1)
 {
+    DPRINT1("D3DKmtQueryAllocationResidency: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -592,6 +632,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryResourceInfo(_Inout_ D3DKMT_QUERYRESOURCEINFO* unnamedParam1)
 {
+    DPRINT1("D3DKmtQueryResourceInfo: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -605,6 +646,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryStatistics(_Inout_ const D3DKMT_QUERYSTATISTICS* unnamedParam1)
 {
+    DPRINT1("D3DKmtQueryStatistics: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -618,6 +660,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIReleaseProcessVidPnSourceOwners(_In_ HANDLE unnamedParam1)
 {
+    DPRINT1("D3DKmtReleaseProcessVidPnSourceOwners: ProcessHandle=0x%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -631,6 +674,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIRender(_In_ D3DKMT_RENDER* unnamedParam1)
 {
+    DPRINT1("D3DKmtRender: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -644,6 +688,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetAllocationPriority(_In_ const D3DKMT_SETALLOCATIONPRIORITY* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetAllocationPriority: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -657,6 +702,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetContextSchedulingPriority(_In_ const D3DKMT_SETCONTEXTSCHEDULINGPRIORITY* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetContextSchedulingPriority: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -670,6 +716,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetDisplayMode: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -683,6 +730,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetDisplayPrivateDriverFormat(_In_ const D3DKMT_SETDISPLAYPRIVATEDRIVERFORMAT* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetDisplayPrivateDriverFormat: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -696,6 +744,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetGammaRamp(_In_ const D3DKMT_SETGAMMARAMP* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetGammaRamp: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -710,6 +759,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetQueuedLimit(_Inout_ const D3DKMT_SETQUEUEDLIMIT* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetQueuedLimit: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -723,6 +773,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetVidPnSourceOwner(_In_ const D3DKMT_SETVIDPNSOURCEOWNER* unnamedParam1)
 {
+    DPRINT1("D3DKmtSetVidPnSourceOwner: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -736,6 +787,7 @@ NTSTATUS
 WINAPI
 NtGdiDdDDIUnlock(_In_ const D3DKMT_UNLOCK* unnamedParam1)
 {
+    DPRINT1("D3DKmtUnlock: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -749,6 +801,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIUpdateOverlay(_In_ const D3DKMT_UPDATEOVERLAY* unnamedParam1)
 {
+    DPRINT1("D3DKmtUpdateOverlay: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -762,6 +815,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIWaitForIdle(_In_ const D3DKMT_WAITFORIDLE* unnamedParam1)
 {
+    DPRINT1("D3DKmtWaitForIdle: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -775,6 +829,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIWaitForSynchronizationObject(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
+    DPRINT1("D3DKmtWaitForSynchronizationObject: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -788,6 +843,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIWaitForVerticalBlankEvent(_In_ const D3DKMT_WAITFORVERTICALBLANKEVENT* unnamedParam1)
 {
+    DPRINT1("D3DKmtWaitForVerticalBlankEvent: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
@@ -801,6 +857,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISignalSynchronizationObject(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
+    DPRINT1("D3DKmtSignalSynchronizationObject: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
         STATUS_INVALID_PARAMETER;
 
