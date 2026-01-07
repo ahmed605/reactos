@@ -315,6 +315,96 @@ Fail:
     return Status;
 }
 
+/*
+ * Build a constraining VidPN for EnumVidPnCofuncModality.
+ * This creates a VidPN with topology and mode sets but WITHOUT pinning modes,
+ * allowing the miniport to add all its supported modes.
+ */
+NTSTATUS
+NTAPI
+RxgkBuildConstrainingVidPn(
+    _Out_ D3DKMDT_HVIDPN* phVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId)
+{
+    RXGK_VIDPN_TRACE1("phVidPn=%p SourceId=%lu TargetId=%lu", phVidPn, (ULONG)VidPnSourceId, (ULONG)VidPnTargetId);
+    if (!phVidPn)
+        return STATUS_INVALID_PARAMETER;
+
+    *phVidPn = NULL;
+
+    D3DKMDT_HVIDPN hVidPn = NULL;
+    NTSTATUS Status = RxgkCreateVidPn(&hVidPn);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    // --- Source mode set: create empty mode set (no modes, no pinning) ---
+    {
+        D3DKMDT_HVIDPNSOURCEMODESET hSourceSet = NULL;
+        const DXGK_VIDPNSOURCEMODESET_INTERFACE* pSourceIf = NULL;
+        Status = RxgkVidPnCreateNewSourceModeSet(hVidPn, VidPnSourceId, &hSourceSet, &pSourceIf);
+        if (!NT_SUCCESS(Status) || !pSourceIf)
+            goto Fail;
+
+        // Assign empty mode set (no modes added, nothing pinned)
+        Status = RxgkVidPnAssignSourceModeSet(hVidPn, VidPnSourceId, hSourceSet);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
+    // --- Target mode set: create empty mode set (no modes, no pinning) ---
+    {
+        D3DKMDT_HVIDPNTARGETMODESET hTargetSet = NULL;
+        const DXGK_VIDPNTARGETMODESET_INTERFACE* pTargetIf = NULL;
+        Status = RxgkVidPnCreateNewTargetModeSet(hVidPn, VidPnTargetId, &hTargetSet, &pTargetIf);
+        if (!NT_SUCCESS(Status) || !pTargetIf)
+            goto Fail;
+
+        // Assign empty mode set (no modes added, nothing pinned)
+        Status = RxgkVidPnAssignTargetModeSet(hVidPn, VidPnTargetId, hTargetSet);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
+    // --- Topology: one path SourceId -> TargetId ---
+    {
+        D3DKMDT_HVIDPNTOPOLOGY hTopology = NULL;
+        const DXGK_VIDPNTOPOLOGY_INTERFACE* pTopoIf = NULL;
+        Status = RxgkVidPnGetTopology(hVidPn, &hTopology, &pTopoIf);
+        if (!NT_SUCCESS(Status) || !pTopoIf)
+            goto Fail;
+
+        D3DKMDT_VIDPN_PRESENT_PATH* pNewPath = NULL;
+        Status = pTopoIf->pfnCreateNewPathInfo(hTopology, &pNewPath);
+        if (!NT_SUCCESS(Status) || !pNewPath)
+            goto Fail;
+
+        RtlZeroMemory(pNewPath, sizeof(*pNewPath));
+        pNewPath->VidPnSourceId = VidPnSourceId;
+        pNewPath->VidPnTargetId = VidPnTargetId;
+        pNewPath->GammaRamp.Type = D3DDDI_GAMMARAMP_DEFAULT;
+        pNewPath->ContentTransformation.Scaling = D3DKMDT_VPPS_UNINITIALIZED;
+        pNewPath->ContentTransformation.Rotation = D3DKMDT_VPPR_UNINITIALIZED;
+        pNewPath->VidPnTargetColorBasis = D3DKMDT_CB_SCRGB;
+
+        Status = pTopoIf->pfnAddPath(hTopology, pNewPath);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
+    // Note: We create empty mode sets (no modes, no pinning) so that:
+    // 1. The VidPN is valid and VBoxWddm can acquire the mode sets
+    // 2. VBoxWddm can release them, create new ones, and add all supported modes
+    // 3. Since no modes are pinned, VBoxWddm will add all its supported modes
+
+    *phVidPn = hVidPn;
+    return STATUS_SUCCESS;
+
+Fail:
+    RxgkDestroyVidPn(hVidPn);
+    return Status;
+}
+
 VOID
 NTAPI
 RxgkDestroyVidPn(_In_ D3DKMDT_HVIDPN hVidPn)
@@ -970,7 +1060,7 @@ static NTSTATUS APIENTRY Rxgk_SourceModeSet_AcquirePinnedModeInfo(_In_ const D3D
     if (Set->PinnedId == 0)
     {
         *ppPinned = NULL;
-        return STATUS_SUCCESS;
+        return STATUS_GRAPHICS_MODE_NOT_PINNED;
     }
     for (PLIST_ENTRY e = Set->ModeList.Flink; e != &Set->ModeList; e = e->Flink)
     {
@@ -1126,7 +1216,7 @@ static NTSTATUS APIENTRY Rxgk_TargetModeSet_AcquirePinnedModeInfo(_In_ const D3D
     if (Set->PinnedId == 0)
     {
         *ppPinned = NULL;
-        return STATUS_SUCCESS;
+        return STATUS_GRAPHICS_MODE_NOT_PINNED;
     }
     for (PLIST_ENTRY e = Set->ModeList.Flink; e != &Set->ModeList; e = e->Flink)
     {

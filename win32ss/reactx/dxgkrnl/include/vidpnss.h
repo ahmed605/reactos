@@ -24,3 +24,10 @@ RxgkBuildSimpleFunctionalVidPn(
     _Out_ D3DKMDT_HVIDPN* phVidPn,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId);
+
+NTSTATUS
+NTAPI
+RxgkBuildConstrainingVidPn(
+    _Out_ D3DKMDT_HVIDPN* phVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId);

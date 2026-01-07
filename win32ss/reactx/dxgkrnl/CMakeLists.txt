@@ -13,6 +13,7 @@ list(APPEND SOURCE
      miniport/rxgkdispatch.cpp
      miniport/rxgkport.cpp
      videoss/vidpininterface.cpp
+     videoss/monitorinterface.cpp
      kmt/win32k_callbacks.cpp
      kmt/d3dkmt_test.cpp
      kmt/allocation.cpp

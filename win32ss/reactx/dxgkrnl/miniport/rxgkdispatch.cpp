@@ -343,7 +343,9 @@ RxgkStartAdapter()
 
     DXGKARG_ENUMVIDPNCOFUNCMODALITY EnumCofunc = {0};
     D3DKMDT_HVIDPN hConstrainingVidPn = NULL;
-    NTSTATUS VidPnStatus = RxgkBuildSimpleFunctionalVidPn(&hConstrainingVidPn, 0, 0);
+    // Use RxgkBuildConstrainingVidPn instead of RxgkBuildSimpleFunctionalVidPn
+    // to avoid pinning modes, which prevents miniports from adding all their supported modes
+    NTSTATUS VidPnStatus = RxgkBuildConstrainingVidPn(&hConstrainingVidPn, 0, 0);
     if (!NT_SUCCESS(VidPnStatus))
     {
         DPRINT1("RxgkStartAdapter: Failed to build constraining VidPN %X\n", VidPnStatus);
@@ -353,16 +355,181 @@ RxgkStartAdapter()
     EnumCofunc.hConstrainingVidPn = hConstrainingVidPn;
     EnumCofunc.EnumPivotType = D3DKMDT_EPT_NOPIVOT;
 
+    /* Call the miniport's EnumVidPnCofuncModality to let it add all supported modes */
     if (RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality)
     {
         Status = RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality(RxgkDriverExtension->MiniportContext,
                                                                      &EnumCofunc);
-        DPRINT1("RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality: returned with Status %X\n", Status);
+        DPRINT1("RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality: returned with Status 0x%08X\n", Status);
     }
     else
     {
         DPRINT1("RxgkStartAdapter: Miniport does not provide EnumVidPnCofuncModality\n");
         Status = STATUS_NOT_SUPPORTED;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        RxgkDestroyVidPn(hConstrainingVidPn);
+        return Status;
+    }
+
+    /*
+     * Walk through the VidPN network to enumerate all paths and modes AFTER
+     * the miniport has populated it. This shows us all the modes that VBoxWddm
+     * (or any miniport) has added.
+     */
+    {
+        D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology = NULL;
+        const DXGK_VIDPN_INTERFACE* pVidPnInterface = NULL;
+        const DXGK_VIDPNTOPOLOGY_INTERFACE* pVidPnTopologyInterface = NULL;
+        const D3DKMDT_VIDPN_PRESENT_PATH* pVidPnPresentPath = NULL;
+        const D3DKMDT_VIDPN_PRESENT_PATH* pVidPnPresentPathNext = NULL;
+
+        /* Get the VidPn Interface */
+        Status = DxgkrnlInterface.DxgkCbQueryVidPnInterface(hConstrainingVidPn,
+                                                             DXGK_VIDPN_INTERFACE_VERSION_V1,
+                                                             &pVidPnInterface);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkStartAdapter: DxgkCbQueryVidPnInterface failed with Status 0x%08X\n", Status);
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return Status;
+        }
+
+        /* Get the VidPn Topology interface */
+        Status = pVidPnInterface->pfnGetTopology(hConstrainingVidPn, &hVidPnTopology, &pVidPnTopologyInterface);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkStartAdapter: pfnGetTopology failed with Status 0x%08X\n", Status);
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return Status;
+        }
+
+        /* Enumerate all paths in the VidPN topology */
+        Status = pVidPnTopologyInterface->pfnAcquireFirstPathInfo(hVidPnTopology, &pVidPnPresentPath);
+        if (Status == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET)
+        {
+            DPRINT1("RxgkStartAdapter: VidPN has no paths after miniport enumeration\n");
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return STATUS_GRAPHICS_INVALID_VIDPN;
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkStartAdapter: pfnAcquireFirstPathInfo failed with Status 0x%08X\n", Status);
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return Status;
+        }
+
+        /* Loop through all available paths */
+        while (NT_SUCCESS(Status))
+        {
+            D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet = NULL;
+            D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet = NULL;
+            const DXGK_VIDPNSOURCEMODESET_INTERFACE* pVidPnSourceModeSetInterface = NULL;
+            const DXGK_VIDPNTARGETMODESET_INTERFACE* pVidPnTargetModeSetInterface = NULL;
+            const D3DKMDT_VIDPN_SOURCE_MODE* pVidPnSourceMode = NULL;
+            const D3DKMDT_VIDPN_TARGET_MODE* pVidPnTargetMode = NULL;
+            SIZE_T NumSourceModes = 0;
+            SIZE_T NumTargetModes = 0;
+
+            DPRINT1("RxgkStartAdapter: Enumerating path: SourceId=%lu TargetId=%lu\n",
+                    (ULONG)pVidPnPresentPath->VidPnSourceId,
+                    (ULONG)pVidPnPresentPath->VidPnTargetId);
+
+            /* Enumerate source modes for this path */
+            Status = pVidPnInterface->pfnAcquireSourceModeSet(hConstrainingVidPn,
+                                                               pVidPnPresentPath->VidPnSourceId,
+                                                               &hVidPnSourceModeSet,
+                                                               &pVidPnSourceModeSetInterface);
+            if (NT_SUCCESS(Status))
+            {
+                Status = pVidPnSourceModeSetInterface->pfnGetNumModes(hVidPnSourceModeSet, &NumSourceModes);
+                if (NT_SUCCESS(Status))
+                {
+                    DPRINT1("RxgkStartAdapter: Source %lu has %Iu modes\n",
+                            (ULONG)pVidPnPresentPath->VidPnSourceId, NumSourceModes);
+
+                    /* Walk through all source modes */
+                    Status = pVidPnSourceModeSetInterface->pfnAcquireFirstModeInfo(hVidPnSourceModeSet, &pVidPnSourceMode);
+                    while (NT_SUCCESS(Status) && pVidPnSourceMode)
+                    {
+                        DPRINT1("RxgkStartAdapter:   Source Mode %lu: %lux%lu stride=%lu format=%lu\n",
+                                (ULONG)pVidPnSourceMode->Id,
+                                (ULONG)pVidPnSourceMode->Format.Graphics.PrimSurfSize.cx,
+                                (ULONG)pVidPnSourceMode->Format.Graphics.PrimSurfSize.cy,
+                                (ULONG)pVidPnSourceMode->Format.Graphics.Stride,
+                                (ULONG)pVidPnSourceMode->Format.Graphics.PixelFormat);
+
+                        Status = pVidPnSourceModeSetInterface->pfnAcquireNextModeInfo(hVidPnSourceModeSet,
+                                                                                      pVidPnSourceMode,
+                                                                                      &pVidPnSourceMode);
+                    }
+                    if (Status == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET)
+                        Status = STATUS_SUCCESS;
+
+                    pVidPnInterface->pfnReleaseSourceModeSet(hConstrainingVidPn, hVidPnSourceModeSet);
+                }
+            }
+
+            /* Enumerate target modes for this path */
+            Status = pVidPnInterface->pfnAcquireTargetModeSet(hConstrainingVidPn,
+                                                                pVidPnPresentPath->VidPnTargetId,
+                                                                &hVidPnTargetModeSet,
+                                                                &pVidPnTargetModeSetInterface);
+            if (NT_SUCCESS(Status))
+            {
+                Status = pVidPnTargetModeSetInterface->pfnGetNumModes(hVidPnTargetModeSet, &NumTargetModes);
+                if (NT_SUCCESS(Status))
+                {
+                    DPRINT1("RxgkStartAdapter: Target %lu has %Iu modes\n",
+                            (ULONG)pVidPnPresentPath->VidPnTargetId, NumTargetModes);
+
+                    /* Walk through all target modes */
+                    Status = pVidPnTargetModeSetInterface->pfnAcquireFirstModeInfo(hVidPnTargetModeSet, &pVidPnTargetMode);
+                    while (NT_SUCCESS(Status) && pVidPnTargetMode)
+                    {
+                        DPRINT1("RxgkStartAdapter:   Target Mode %lu: %lux%lu @ %lu/%lu Hz\n",
+                                (ULONG)pVidPnTargetMode->Id,
+                                (ULONG)pVidPnTargetMode->VideoSignalInfo.ActiveSize.cx,
+                                (ULONG)pVidPnTargetMode->VideoSignalInfo.ActiveSize.cy,
+                                (ULONG)pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Numerator,
+                                (ULONG)pVidPnTargetMode->VideoSignalInfo.VSyncFreq.Denominator);
+
+                        Status = pVidPnTargetModeSetInterface->pfnAcquireNextModeInfo(hVidPnTargetModeSet,
+                                                                                       pVidPnTargetMode,
+                                                                                       &pVidPnTargetMode);
+                    }
+                    if (Status == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET)
+                        Status = STATUS_SUCCESS;
+
+                    pVidPnInterface->pfnReleaseTargetModeSet(hConstrainingVidPn, hVidPnTargetModeSet);
+                }
+            }
+
+            /* Get the next path */
+            Status = pVidPnTopologyInterface->pfnAcquireNextPathInfo(hVidPnTopology,
+                                                                      pVidPnPresentPath,
+                                                                      &pVidPnPresentPathNext);
+            if (Status == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET)
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("RxgkStartAdapter: pfnAcquireNextPathInfo failed with Status 0x%08X\n", Status);
+                break;
+            }
+
+            pVidPnTopologyInterface->pfnReleasePathInfo(hVidPnTopology, pVidPnPresentPath);
+            pVidPnPresentPath = pVidPnPresentPathNext;
+            pVidPnPresentPathNext = NULL;
+        }
+
+        /* Release the last path if we have one */
+        if (pVidPnPresentPath)
+            pVidPnTopologyInterface->pfnReleasePathInfo(hVidPnTopology, pVidPnPresentPath);
     }
 
     if (hConstrainingVidPn)

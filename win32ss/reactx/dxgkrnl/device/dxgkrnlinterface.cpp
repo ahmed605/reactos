@@ -1435,17 +1435,14 @@ RxgkCbEnumHandleChildren(IN_CONST_PDXGKARGCB_ENUMHANDLECHILDREN EnumHandleChildr
     return 0;
 }
 
+// RxgkCbQueryMonitorInterface is implemented in videoss/monitorinterface.cpp
+EXTERN_C 
 NTSTATUS
 APIENTRY
 CALLBACK
 RxgkCbQueryMonitorInterface(_In_ const HANDLE                          hAdapter,
                             _In_ const DXGK_MONITOR_INTERFACE_VERSION  MonitorInterfaceVersion,
-                            _Outptr_ const DXGK_MONITOR_INTERFACE**    ppMonitorInterface)
-{
-    //TODO: Implement meh
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
-}
+                            _Outptr_ const DXGK_MONITOR_INTERFACE**    ppMonitorInterface);
 
 NTSTATUS
 APIENTRY
