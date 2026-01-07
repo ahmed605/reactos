@@ -228,6 +228,29 @@ DXGADAPTER_SETDISPLAYPRIVATEDRIVERFORMAT(_In_ const D3DKMT_SETDISPLAYPRIVATEDRIV
 
 typedef DXGADAPTER_SETDISPLAYPRIVATEDRIVERFORMAT *PDXGADAPTER_SETDISPLAYPRIVATEDRIVERFORMAT;
 
+/*
+ * CDD-style enable call (Win8+ concept): dxgkrnl returns the primary allocation handle
+ * and the scanout layout (width/height/pitch/format). CDD then uses Lock/Unlock/Present
+ * against that allocation handle.
+ */
+typedef struct _RXGKCDD_ENABLE
+{
+    D3DKMT_HANDLE                   hAdapter;       /* in (optional for bring-up) */
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;  /* in */
+
+    D3DKMT_HANDLE                   hPrimaryAllocation; /* out */
+    UINT                            Width;              /* out */
+    UINT                            Height;             /* out */
+    UINT                            Pitch;              /* out (bytes per scanline) */
+    D3DDDIFORMAT                    Format;             /* out */
+} RXGKCDD_ENABLE, *PRXGKCDD_ENABLE;
+
+typedef
+NTSTATUS
+DXGCDD_ENABLE(_Inout_ PRXGKCDD_ENABLE unnamedParam1);
+
+typedef DXGCDD_ENABLE *PDXGCDD_ENABLE;
+
 
 typedef
 NTSTATUS
@@ -430,4 +453,5 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
     PDXGADAPTER_SETDISPLAYMODE RxgkIntPfnSetDisplayMode;
     PDXGADAPTER_SETDISPLAYPRIVATEDRIVERFORMAT RxgkIntPfnSetDisplayPrivateDriverFormat;
     PDXGADAPTER_UNLOCK RxgkIntPfnUnlock;
+    PDXGCDD_ENABLE RxgkIntPfnCddEnable;
 } REACTOS_WIN32K_DXGKRNL_INTERFACE, *PREACTOS_WIN32K_DXGKRNL_INTERFACE;

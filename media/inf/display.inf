@@ -65,7 +65,7 @@ ReactOS = "ReactOS Project"
 DisplayClassName = "Display Adapters"
 
 StdMfg = "(Standard display adapters)"
-VGA.DeviceDesc = "VGA-compatible graphics card"
+VGA.DeviceDesc = "ReactOS Basic Display Driver"
 
 [Strings.0404]
 DisplayClassName = "顯示介面卡"

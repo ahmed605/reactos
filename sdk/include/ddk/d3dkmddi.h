@@ -514,6 +514,40 @@ C_ASSERT(sizeof(DXGK_ALLOCATIONINFO) == 0x3C);
 #endif
 #endif
 
+typedef struct _DXGK_CREATEALLOCATIONFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT                Resource    : 1;    // 0x00000001
+            UINT                Reserved    :31;    // 0xFFFFFFFE
+        };
+        UINT                    Value;
+    };
+} DXGK_CREATEALLOCATIONFLAGS;
+
+typedef struct _DXGKARG_CREATEALLOCATION
+{
+    CONST VOID*                 pPrivateDriverData;
+    UINT                        PrivateDriverDataSize;
+    UINT                        NumAllocations;
+    DXGK_ALLOCATIONINFO*        pAllocationInfo;
+    HANDLE                      hResource;
+    DXGK_CREATEALLOCATIONFLAGS  Flags;
+} DXGKARG_CREATEALLOCATION, *PDXGKARG_CREATEALLOCATION;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_CREATEALLOCATION(
+    _In_ const HANDLE                      hAdapter,
+    _Inout_ PDXGKARG_CREATEALLOCATION      pCreateAllocation
+    );
+
+typedef DXGKDDI_CREATEALLOCATION *PDXGKDDI_CREATEALLOCATION;
+
 typedef struct _DXGKCB_NOTIFY_INTERRUPT_DATA_FLAGS
 {
     union
@@ -1741,9 +1775,9 @@ typedef DXGKDDI_QUERYVIDPNHWCAPABILITY *PDXGKDDI_QUERYVIDPNHWCAPABILITY;
 
 typedef DXGKDDI_QUERYADAPTERINFO                *PDXGKDDI_QUERYADAPTERINFO;
 typedef DXGKDDI_CREATEDEVICE                    *PDXGKDDI_CREATEDEVICE;
-// TODO: Lazy
+// Allocation DDIs are now properly defined above
 #if 0
-typedef DXGKDDI_CREATEALLOCATION                *PDXGKDDI_CREATEALLOCATION;
+// Legacy stub typedefs - now replaced by real definitions above
 typedef DXGKDDI_DESTROYALLOCATION               *PDXGKDDI_DESTROYALLOCATION;
 typedef DXGKDDI_DESCRIBEALLOCATION              *PDXGKDDI_DESCRIBEALLOCATION;
 typedef DXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA *PDXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA;
@@ -1787,7 +1821,7 @@ typedef DXGKDDI_CREATECONTEXT                   *PDXGKDDI_CREATECONTEXT;
 typedef DXGKDDI_DESTROYCONTEXT                  *PDXGKDDI_DESTROYCONTEXT;
 typedef DXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT   *PDXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT;
 #endif
-typedef UINT32 *PDXGKDDI_CREATEALLOCATION;
+// PDXGKDDI_CREATEALLOCATION is now properly defined above with DXGKDDI_CREATEALLOCATION
 typedef UINT32 *PDXGKDDI_DESTROYALLOCATION;
 typedef UINT32 *PDXGKDDI_DESCRIBEALLOCATION;
 typedef UINT32 *PDXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA;

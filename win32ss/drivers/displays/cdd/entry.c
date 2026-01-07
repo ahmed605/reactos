@@ -46,7 +46,6 @@ DrvEnableDriver(ULONG iEngineVersion,
                 PDRVENABLEDATA pded)
 {
     DPRINT1("---ReactOS CDD - ReactOS Display Driver Model---\n");
-    __debugbreak();
     if (cj >= sizeof(DRVENABLEDATA))
     {
        pded->c = sizeof(DrvFunctionTable) / sizeof(DRVFN);

@@ -308,32 +308,41 @@ RxgkpTryProgramVbeAndCache(_In_opt_ HANDLE DeviceHandleForTargetId)
             break;
     }
 
-    /* Fallback: probe standard VBE mode IDs directly (works even if the mode list pointer is garbage). */
+    /* Fallback: probe a wider range of VBE mode IDs directly (works even if the mode list pointer is garbage). */
     if (BestMode == 0xFFFF)
     {
-        static const USHORT ProbeModes[] = {
-            /* 1024x768 */
-            0x11B, /* commonly 1280x1024x32 (some BIOSes place 32bpp here) */
-            0x11E, /* commonly 1600x1200x32 */
-            0x118, /* commonly 1024x768x24 */
-            0x119, /* commonly 1280x1024x16 */
-            0x11A, /* commonly 1280x1024x24 */
-            0x117, /* commonly 1024x768x16 */
-            /* 800x600 */
-            0x115, /* commonly 800x600x24 */
-            0x114, /* commonly 800x600x16 */
-            /* 640x480 */
-            0x112, /* commonly 640x480x24 */
-            0x111  /* commonly 640x480x16 */
-        };
-
-        DPRINT1("VBE: mode list did not yield a 32bpp LFB mode; probing standard IDs...\n");
-        for (ULONG i = 0; i < ARRAYSIZE(ProbeModes); ++i)
+        DPRINT1("VBE: mode list did not yield a 32bpp LFB mode; probing 0x100-0x1FF for LFB modes...\n");
+        for (USHORT mode = 0x100; mode < 0x200; ++mode)
         {
-            RxgkpLogModeSummary(BufferSeg, BufferOff, ProbeModes[i]);
-            RxgkpConsiderMode(BufferSeg, BufferOff, ProbeModes[i], &BestMode, &BestX, &BestY, &BestPitch, &BestBpp, &BestPhysBase);
-            if ((BestX == 1024) && (BestY == 768) && (BestBpp == 32))
-                break;
+            RxgkpLogModeSummary(BufferSeg, BufferOff, mode);
+            RxgkpConsiderMode(BufferSeg, BufferOff, mode,
+                              &BestMode, &BestX, &BestY, &BestPitch, &BestBpp, &BestPhysBase);
+            /* Let RxgkpConsiderMode pick the best; do not break early. */
+        }
+
+        /*
+         * If we still have no best mode, fall back to a small set of common 16/24bpp IDs
+         * so that we at least get a usable graphics mode.
+         */
+        if (BestMode == 0xFFFF)
+        {
+            static const USHORT FallbackModes[] = {
+                0x118, /* 1024x768x24 on many BIOSes */
+                0x117, /* 1024x768x16 */
+                0x115, /* 800x600x24 */
+                0x114, /* 800x600x16 */
+                0x112, /* 640x480x24 */
+                0x111  /* 640x480x16 */
+            };
+
+            for (ULONG i = 0; i < ARRAYSIZE(FallbackModes); ++i)
+            {
+                RxgkpLogModeSummary(BufferSeg, BufferOff, FallbackModes[i]);
+                RxgkpConsiderMode(BufferSeg, BufferOff, FallbackModes[i],
+                                  &BestMode, &BestX, &BestY, &BestPitch, &BestBpp, &BestPhysBase);
+                if (BestMode != 0xFFFF)
+                    break;
+            }
         }
     }
 

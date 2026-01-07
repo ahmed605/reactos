@@ -66,6 +66,7 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
 #endif
     RxgkDriverExtension->DxgkDdiQueryAdapterInfo = DriverInitData->DxgkDdiQueryAdapterInfo;
     RxgkDriverExtension->DxgkDdiCreateDevice = DriverInitData->DxgkDdiCreateDevice;
+    RxgkDriverExtension->DxgkDdiCreateAllocation = DriverInitData->DxgkDdiCreateAllocation;
 
     DPRINT1("RDDM: WDDM Miniport driver reports a version of %X\n", RxgkDriverExtension->Version);
     PDRIVER_EXTENSION DriverExtend;

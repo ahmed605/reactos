@@ -1,6 +1,280 @@
 
 #include "cdd.h"
 #include <debug.h>
+#include <reactos/rddm/rxgkinterface.h>
+
+#define IOCTL_VIDEO_GIVE_CALLSBACK \
+   CTL_CODE(FILE_DEVICE_VIDEO, 0xC, METHOD_NEITHER, FILE_ANY_ACCESS)
+
+#ifdef NONAMELESSUNION
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).u.Status)
+#else
+#define RXGK_IOSB_STATUS(_iosb) ((_iosb).Status)
+#endif
+
+static REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkCallbacks;
+static BOOLEAN g_DxgkCallbacksValid = FALSE;
+
+static
+BOOL
+CddEnsureDxgkCallbacks(VOID)
+{
+   NTSTATUS Status;
+   PFILE_OBJECT FileObject = NULL;
+   PDEVICE_OBJECT DeviceObject = NULL;
+   PIRP Irp;
+   KEVENT Event;
+   IO_STATUS_BLOCK IoStatusBlock;
+   UNICODE_STRING DestinationString;
+
+   if (g_DxgkCallbacksValid)
+      return TRUE;
+
+   RtlInitUnicodeString(&DestinationString, L"\\Device\\DxgKrnl");
+   Status = IoGetDeviceObjectPointer(&DestinationString, FILE_ALL_ACCESS, &FileObject, &DeviceObject);
+   if (!NT_SUCCESS(Status))
+      return FALSE;
+
+   RtlZeroMemory(&g_DxgkCallbacks, sizeof(g_DxgkCallbacks));
+   KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+   Irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_GIVE_CALLSBACK,
+                              DeviceObject,
+                              NULL,
+                              0,
+                              &g_DxgkCallbacks,
+                              sizeof(g_DxgkCallbacks),
+                              TRUE,
+                              &Event,
+                              &IoStatusBlock);
+   if (!Irp)
+   {
+      ObDereferenceObject(FileObject);
+      return FALSE;
+   }
+
+   Status = IofCallDriver(DeviceObject, Irp);
+   if (Status == STATUS_PENDING)
+      KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+
+   Status = RXGK_IOSB_STATUS(IoStatusBlock);
+   ObDereferenceObject(FileObject);
+
+   if (!NT_SUCCESS(Status))
+      return FALSE;
+
+   g_DxgkCallbacksValid = TRUE;
+   return TRUE;
+}
+
+static
+BOOL
+CddEnablePrimary(_Inout_ PCDDPDEV ppdev,
+                 _Out_ ULONG* Width,
+                 _Out_ ULONG* Height,
+                 _Out_ ULONG* Pitch,
+                 _Out_ ULONG* Bpp)
+{
+   NTSTATUS Status;
+   RXGKCDD_ENABLE EnableArgs;
+
+   if (!ppdev || !Width || !Height || !Pitch || !Bpp)
+      return FALSE;
+
+   *Width = 0;
+   *Height = 0;
+   *Pitch = 0;
+   *Bpp = 0;
+   ppdev->hPrimaryAllocation = 0;
+
+   if (!CddEnsureDxgkCallbacks())
+      return FALSE;
+
+   if (!g_DxgkCallbacks.RxgkIntPfnCddEnable)
+      return FALSE;
+
+   RtlZeroMemory(&EnableArgs, sizeof(EnableArgs));
+   EnableArgs.hAdapter = 0;
+   EnableArgs.VidPnSourceId = 0;
+
+   Status = g_DxgkCallbacks.RxgkIntPfnCddEnable(&EnableArgs);
+   if (!NT_SUCCESS(Status))
+      return FALSE;
+
+   if (EnableArgs.hPrimaryAllocation == 0 || EnableArgs.Width == 0 || EnableArgs.Height == 0 || EnableArgs.Pitch == 0)
+      return FALSE;
+
+   ppdev->hPrimaryAllocation = EnableArgs.hPrimaryAllocation;
+   *Width = EnableArgs.Width;
+   *Height = EnableArgs.Height;
+   *Pitch = EnableArgs.Pitch;
+
+   /* Derive bits-per-pixel from format; if unknown, fall back to pitch/width. */
+   switch (EnableArgs.Format)
+   {
+      case D3DDDIFMT_P8:
+         *Bpp = 8;
+         break;
+      case D3DDDIFMT_R5G6B5:
+         *Bpp = 16;
+         break;
+      case D3DDDIFMT_R8G8B8:
+         *Bpp = 24;
+         break;
+      case D3DDDIFMT_X8R8G8B8:
+      case D3DDDIFMT_A8R8G8B8:
+         *Bpp = 32;
+         break;
+      default:
+      {
+         if (EnableArgs.Width != 0 && (EnableArgs.Pitch % EnableArgs.Width) == 0)
+         {
+            UINT bytesPerPixel = EnableArgs.Pitch / EnableArgs.Width;
+            if (bytesPerPixel >= 1 && bytesPerPixel <= 4)
+               *Bpp = bytesPerPixel * 8;
+            else
+               *Bpp = 32;
+         }
+         else
+         {
+            *Bpp = 32;
+         }
+         break;
+      }
+   }
+
+   DPRINT1("CddEnablePrimary: hAlloc=%p WxH=%ux%u Pitch=%u Bpp=%u Format=%u\n",
+           (PVOID)(ULONG_PTR)ppdev->hPrimaryAllocation, *Width, *Height, *Pitch, *Bpp, EnableArgs.Format);
+   return TRUE;
+}
+
+static
+BOOL
+CddLockPrimary(_In_ PCDDPDEV ppdev, _Out_ PVOID* Bits)
+{
+   D3DKMT_LOCK LockArgs;
+
+   if (!ppdev || !Bits)
+      return FALSE;
+
+   *Bits = NULL;
+   if (!CddEnsureDxgkCallbacks())
+      return FALSE;
+
+   if (!g_DxgkCallbacks.RxgkIntPfnLock)
+      return FALSE;
+
+   RtlZeroMemory(&LockArgs, sizeof(LockArgs));
+   LockArgs.hDevice = 0;
+   LockArgs.hAllocation = ppdev->hPrimaryAllocation;
+   if (LockArgs.hAllocation == 0)
+      return FALSE;
+   {
+      NTSTATUS Status = g_DxgkCallbacks.RxgkIntPfnLock(&LockArgs);
+      if (!NT_SUCCESS(Status))
+      {
+         DPRINT1("CddLockPrimary: RxgkIntPfnLock failed 0x%08X (hAlloc=%p)\n",
+                 Status, (PVOID)(ULONG_PTR)LockArgs.hAllocation);
+         return FALSE;
+      }
+   }
+
+   *Bits = LockArgs.pData;
+   if (*Bits == NULL)
+   {
+      DPRINT1("CddLockPrimary: Lock returned NULL pData (hAlloc=%p)\n",
+              (PVOID)(ULONG_PTR)LockArgs.hAllocation);
+      return FALSE;
+   }
+
+   return TRUE;
+}
+
+static
+VOID
+CddUnlockPrimary(_Inout_ PCDDPDEV ppdev)
+{
+   D3DKMT_UNLOCK UnlockArgs;
+   D3DKMT_HANDLE Alloc;
+
+   if (!ppdev)
+      return;
+
+   if (!g_DxgkCallbacksValid || !g_DxgkCallbacks.RxgkIntPfnUnlock)
+      return;
+
+   Alloc = ppdev->hPrimaryAllocation;
+   if (!Alloc)
+      return;
+
+   RtlZeroMemory(&UnlockArgs, sizeof(UnlockArgs));
+   UnlockArgs.hDevice = 0;
+   UnlockArgs.NumAllocations = 1;
+   UnlockArgs.phAllocations = &Alloc;
+   (void)g_DxgkCallbacks.RxgkIntPfnUnlock(&UnlockArgs);
+}
+
+static
+BOOL
+CddQueryDxgkDisplayMode(_Out_ D3DKMT_DISPLAYMODE* Mode)
+{
+   NTSTATUS Status;
+   PFILE_OBJECT FileObject = NULL;
+   PDEVICE_OBJECT DeviceObject = NULL;
+   PIRP Irp;
+   KEVENT Event;
+   IO_STATUS_BLOCK IoStatusBlock;
+   UNICODE_STRING DestinationString;
+   REACTOS_WIN32K_DXGKRNL_INTERFACE Callbacks;
+   D3DKMT_GETDISPLAYMODELIST Args;
+
+   if (!Mode)
+      return FALSE;
+
+   RtlZeroMemory(Mode, sizeof(*Mode));
+
+   RtlInitUnicodeString(&DestinationString, L"\\Device\\DxgKrnl");
+   Status = IoGetDeviceObjectPointer(&DestinationString, FILE_ALL_ACCESS, &FileObject, &DeviceObject);
+   if (!NT_SUCCESS(Status))
+      return FALSE;
+
+   RtlZeroMemory(&Callbacks, sizeof(Callbacks));
+   KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+   Irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_GIVE_CALLSBACK,
+                              DeviceObject,
+                              NULL,
+                              0,
+                              &Callbacks,
+                              sizeof(Callbacks),
+                              TRUE,
+                              &Event,
+                              &IoStatusBlock);
+   if (!Irp)
+   {
+      ObDereferenceObject(FileObject);
+      return FALSE;
+   }
+
+   Status = IofCallDriver(DeviceObject, Irp);
+   if (Status == STATUS_PENDING)
+      KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+   Status = RXGK_IOSB_STATUS(IoStatusBlock);
+
+   if (!NT_SUCCESS(Status) || !Callbacks.RxgkIntPfnGetDisplayModeList)
+   {
+      ObDereferenceObject(FileObject);
+      return FALSE;
+   }
+
+   RtlZeroMemory(&Args, sizeof(Args));
+   Args.hAdapter = 0;
+   Args.VidPnSourceId = 0;
+   Args.ModeCount = 1;
+   Args.pModeList = Mode;
+   Status = Callbacks.RxgkIntPfnGetDisplayModeList(&Args);
+
+   ObDereferenceObject(FileObject);
+   return NT_SUCCESS(Status);
+}
 
 static LOGFONTW SystemFont = { 16, 7, 0, 0, 700, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, VARIABLE_PITCH | FF_DONTCARE, L"System" };
 static LOGFONTW AnsiVariableFont = { 12, 9, 0, 0, 400, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_STROKE_PRECIS, PROOF_QUALITY, VARIABLE_PITCH | FF_DONTCARE, L"MS Sans Serif" };
@@ -131,16 +405,30 @@ IntInitScreenInfo(
    PVIDEO_MODE_INFORMATION ModeInfo, ModeInfoPtr, SelectedMode = NULL;
    //VIDEO_COLOR_CAPABILITIES ColorCapabilities;
   // ULONG Temp;
-    ULONG BytesPerPixel = 4;
+   ULONG BytesPerPixel = 4;
+   ULONG Width = 800, Height = 600, Pitch = 800 * 4, Bpp = 32;
 
-    VIDEO_MODE_INFORMATION ModeInfoList[1];
+   VIDEO_MODE_INFORMATION ModeInfoList[1];
+
+   if (CddEnablePrimary(ppdev, &Width, &Height, &Pitch, &Bpp))
+   {
+      BytesPerPixel = (Bpp + 7) / 8;
+      if (BytesPerPixel == 0)
+         BytesPerPixel = 4;
+   }
+   else
+   {
+      /* Bring-up fallback */
+      ppdev->hPrimaryAllocation = 0;
+   }
+
    ModeInfoList[0].ModeIndex = 0;
-   ModeInfoList[0].VisScreenWidth = 800;
-   ModeInfoList[0].VisScreenHeight = 600;
-   ModeInfoList[0].Length = 0x1D4C00;
-    ModeInfoList[0].ScreenStride = 800 * BytesPerPixel;
+   ModeInfoList[0].VisScreenWidth = Width;
+   ModeInfoList[0].VisScreenHeight = Height;
+   ModeInfoList[0].Length = Pitch * Height;
+   ModeInfoList[0].ScreenStride = Pitch;
     ModeInfoList[0].NumberOfPlanes = 1;
-    ModeInfoList[0].BitsPerPlane = BytesPerPixel * 8;
+   ModeInfoList[0].BitsPerPlane = BytesPerPixel * 8;
     ModeInfoList[0].Frequency = 60;
    ModeInfoList[0].XMillimeter = 0; /* FIXME */
    ModeInfoList[0].YMillimeter = 0; /* FIXME */
@@ -149,9 +437,9 @@ IntInitScreenInfo(
         ModeInfoList[0].NumberRedBits = 8;
         ModeInfoList[0].NumberGreenBits = 8;
         ModeInfoList[0].NumberBlueBits = 8;
-        ModeInfoList[0].RedMask = 0xFF0000;
-        ModeInfoList[0].GreenMask = 0x00FF00;
-        ModeInfoList[0].BlueMask = 0x0000FF;
+      ModeInfoList[0].RedMask = 0x00FF0000;
+      ModeInfoList[0].GreenMask = 0x0000FF00;
+      ModeInfoList[0].BlueMask = 0x000000FF;
     }
     else
     {
@@ -164,13 +452,13 @@ IntInitScreenInfo(
         VIDEO_MODE_NO_OFF_SCREEN;
    ModeInfoList[0].DriverSpecificAttributeFlags = 0;
 
-   ModeInfoSize = sizeof(VIDEO_MODE_INFORMATION) * 2;
+   ModeInfoSize = sizeof(VIDEO_MODE_INFORMATION);
    ModeInfo = ModeInfoList;
    /*
     * Call miniport to get information about video modes.
     */
 
-   ModeCount = 1;//GetAvailableModes(ppdev->hDriver, &ModeInfo, &ModeInfoSize);
+   ModeCount = 1;
    if (ModeCount == 0)
    {
       return FALSE;
@@ -219,9 +507,8 @@ IntInitScreenInfo(
 
    if (SelectedMode == NULL)
    {
-
-      //EngFreeMem(ModeInfo);
-      //return FALSE;
+      /* No valid mode found: fail init to avoid null deref. */
+      return FALSE;
    }
 
    /*
@@ -382,6 +669,11 @@ DrvDisableSurface(
 
    EngDeleteSurface(ppdev->hSurfEng);
    ppdev->hSurfEng = NULL;
+   if (ppdev->ScreenPtr)
+   {
+      CddUnlockPrimary(ppdev);
+      ppdev->ScreenPtr = NULL;
+   }
 }
 
 HSURF APIENTRY
@@ -405,10 +697,12 @@ DrvEnableSurface(
    /*
     * Map the framebuffer into our memory.
     */
-   PHYSICAL_ADDRESS Addr;
-   Addr.QuadPart = 0x80000000;
-   FramebufferMapped = (ULONG_PTR)MmMapIoSpace(Addr, 0x1D4C00, MmNonCached);
-   RtlZeroMemory((PVOID)FramebufferMapped,0x1D4C00);
+      {
+        PVOID Bits;
+            if (!CddLockPrimary(ppdev, &Bits))
+          return NULL;
+        FramebufferMapped = (ULONG_PTR)Bits;
+      }
    //TODO: This is just a note, this isn't suppose to be called yet
    VideoMemoryInfo.FrameBufferBase = (PVOID)FramebufferMapped;
 #if 0
@@ -420,7 +714,7 @@ DrvEnableSurface(
       return NULL;
    }
 #endif
-   ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+   ppdev->ScreenPtr = (PVOID)FramebufferMapped;
 
    switch (ppdev->BitsPerPixel)
    {
@@ -515,164 +809,38 @@ DrvGetModes(_In_ HANDLE hDriver,
             _In_ ULONG cjSize,
             _Out_ DEVMODEW *pdm)
 {
-   NTSTATUS Status = STATUS_PROCEDURE_NOT_FOUND;
-   __debugbreak();
-   /*
-    * X 1) Call EngQueryW32kCddInterface here for some reason TODO: why the fuck here?
-    * 2) There's some functiom callback happening in the stack trace i dont udnerstand here
-    * X 3) Load the Dxgkrnl DeviceObject so we can make IOCTRL calls
-    * X 4) Build IOCTRL request seems like IOCTRL code is : 0x23E05B - Not sure what the name would be
-    * ill have to make oen up but i know this is where the CDD Interface gets passed.. aka
-    * stuff for making some of these requests :)
-    * 5) Get the dipslay mode list. from here we parse ths auto translating from D3DFORMAT to
-    * what GDI will find quite helpful.
-    * 6)
-    *
-    */
-      PFILE_OBJECT RDDM_FileObject = NULL;
-   PDEVICE_OBJECT RDDM_DeviceObject;
-   PIRP Irp;
-   KEVENT Event;
-   IO_STATUS_BLOCK IoStatusBlock;
-   UNICODE_STRING DestinationString;
-  //  D3DKMT_GETDISPLAYMODELIST *GetDisplayModeList;
-   RtlInitUnicodeString(&DestinationString, L"\\Device\\DxgKrnl");
-   Status = IoGetDeviceObjectPointer(&DestinationString, FILE_ALL_ACCESS, &RDDM_FileObject, &RDDM_DeviceObject);
-   if(Status != STATUS_SUCCESS)
-   {
-       DPRINT1("DrvGetModes: Setting up DxgKrnl Failed\n");
-         return 0;
-   }
-   DXGKCDD_INTERFACE Interfaces;
+   UNREFERENCED_PARAMETER(hDriver);
+   UNREFERENCED_PARAMETER(cjSize);
 
-   /* EngQueryW32kCddInterface does not exist in ReactOS; CDD/WDDM interface wiring is still WIP. */
-   /* Build event and create IRP */
-   DPRINT1("DrvGetModes: Building IOCTRL with DxgKrnl\n");
-   KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
-   Irp = IoBuildDeviceIoControlRequest(0x23E05B, /* TODO: decide name*/
-                                         RDDM_DeviceObject,
-                                         &Interfaces,
-                                         sizeof(DXGKCDD_INTERFACE),
-                                         &Interfaces,
-                                         sizeof(DXGKCDD_INTERFACE),
-                                         TRUE,
-                                         &Event,
-                                         &IoStatusBlock);
-
-   Status = IofCallDriver(RDDM_DeviceObject, Irp);
-   KeWaitForSingleObject(&Event, Executive, 0, 0, 0);
-   Status = IoStatusBlock.Status;
-
-   ObDereferenceObject(RDDM_FileObject);
-
-  // Status = Interfaces.DxgkCddGetDisplayModeList(NULL,&GetDisplayModeList);
-   DPRINT1("DxgkCddGetDisplayModeList: Status %d\n", Status);
-  // DPRINT1("DxgkCddGetDisplayModeList: Screen Height %d\n", GetDisplayModeList->pModeList->Height);
-
-#if 0
-typedef struct _VIDEO_MODE_INFORMATION {
-    ULONG Length;
-    ULONG ModeIndex;
-    ULONG VisScreenWidth;
-    ULONG VisScreenHeight;
-    ULONG ScreenStride;
-    ULONG NumberOfPlanes;
-    ULONG BitsPerPlane;
-    ULONG Frequency;
-    ULONG XMillimeter;
-    ULONG YMillimeter;
-    ULONG NumberRedBits;
-    ULONG NumberGreenBits;
-    ULONG NumberBlueBits;
-    ULONG RedMask;
-    ULONG GreenMask;
-    ULONG BlueMask;
-    ULONG AttributeFlags;
-    ULONG VideoMemoryBitmapWidth;
-    ULONG VideoMemoryBitmapHeight;
-    ULONG DriverSpecificAttributeFlags;
-} VIDEO_MODE_INFORMATION, *PVIDEO_MODE_INFORMATION;
-#endif
-       ULONG BytesPerPixel = 4;
-   VIDEO_MODE_INFORMATION ModeInfoList[1];
-   ModeInfoList[0].ModeIndex = 0;
-   ModeInfoList[0].VisScreenWidth = 800;
-   ModeInfoList[0].VisScreenHeight = 600;
-   ModeInfoList[0].Length = 0x1D4C00;
-    ModeInfoList[0].ScreenStride = 800 * BytesPerPixel;
-
-    ModeInfoList[0].NumberOfPlanes = 1;
-    ModeInfoList[0].BitsPerPlane = BytesPerPixel * 8;
-    ModeInfoList[0].Frequency = 60;
-   ModeInfoList[0].XMillimeter = 0; /* FIXME */
-   ModeInfoList[0].YMillimeter = 0; /* FIXME */
-    if (BytesPerPixel >= 3)
-    {
-        ModeInfoList[0].NumberRedBits = 8;
-        ModeInfoList[0].NumberGreenBits = 8;
-        ModeInfoList[0].NumberBlueBits = 8;
-        ModeInfoList[0].RedMask = 0xFF0000;
-        ModeInfoList[0].GreenMask = 0x00FF00;
-        ModeInfoList[0].BlueMask = 0x0000FF;
-    }
-    else
-    {
-        /* FIXME: not implemented */
-       // WARN_(IHVVIDEO, "BytesPerPixel %d - not implemented\n", BytesPerPixel);
-    }
-    ModeInfoList[0].VideoMemoryBitmapWidth = ModeInfoList[0].VisScreenWidth;
-    ModeInfoList[0].VideoMemoryBitmapHeight = ModeInfoList[0].VisScreenHeight;
-    ModeInfoList[0].AttributeFlags = VIDEO_MODE_GRAPHICS | VIDEO_MODE_COLOR |
-        VIDEO_MODE_NO_OFF_SCREEN;
-   ModeInfoList[0].DriverSpecificAttributeFlags = 0;
-
-   ULONG ModeCount;
-   ULONG ModeInfoSize = sizeof(VIDEO_MODE_INFORMATION) * 2;
-   PVIDEO_MODE_INFORMATION ModeInfo, ModeInfoPtr;
+   D3DKMT_DISPLAYMODE DxgMode;
    ULONG OutputSize;
 
-   ModeInfo = ModeInfoList;
-   ModeCount = 1;
-   if (ModeCount == 0)
+   if (!CddQueryDxgkDisplayMode(&DxgMode))
    {
-      return 0;
+      DxgMode.Width = 800;
+      DxgMode.Height = 600;
+      DxgMode.RefreshRate.Numerator = 60;
+      DxgMode.RefreshRate.Denominator = 1;
    }
 
    if (pdm == NULL)
-   {
-      //EngFreeMem(ModeInfo);
-      return 1 * sizeof(DEVMODEW);
-   }
+      return sizeof(DEVMODEW);
 
-   /*
-    * Copy the information about supported modes into the output buffer.
-    */
+   RtlZeroMemory(pdm, sizeof(DEVMODEW));
+   memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
+   pdm->dmSpecVersion = DM_SPECVERSION;
+   pdm->dmDriverVersion = DM_SPECVERSION;
+   pdm->dmSize = sizeof(DEVMODEW);
+   pdm->dmDriverExtra = 0;
+   pdm->dmBitsPerPel = 32;
+   pdm->dmPelsWidth = (ULONG)DxgMode.Width;
+   pdm->dmPelsHeight = (ULONG)DxgMode.Height;
+   pdm->dmDisplayFrequency = 60;
+   pdm->dmDisplayFlags = 0;
+   pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
+               DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
 
-   OutputSize = 0;
-   ModeInfoPtr = ModeInfo;
-
-   while (ModeCount-- > 0)
-   {
-
-      memset(pdm, 0, sizeof(DEVMODEW));
-      memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
-      pdm->dmSpecVersion =
-      pdm->dmDriverVersion = DM_SPECVERSION;
-      pdm->dmSize = sizeof(DEVMODEW);
-      pdm->dmDriverExtra = 0;
-      pdm->dmBitsPerPel = ModeInfoPtr->NumberOfPlanes * ModeInfoPtr->BitsPerPlane;
-      pdm->dmPelsWidth = ModeInfoPtr->VisScreenWidth;
-      pdm->dmPelsHeight = ModeInfoPtr->VisScreenHeight;
-      pdm->dmDisplayFrequency = ModeInfoPtr->Frequency;
-      pdm->dmDisplayFlags = 0;
-      pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
-                      DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
-
-      ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
-      pdm = (LPDEVMODEW)(((ULONG_PTR)pdm) + sizeof(DEVMODEW));
-      OutputSize += sizeof(DEVMODEW);
-   }
-
+   OutputSize = sizeof(DEVMODEW);
    return OutputSize;
 }
 

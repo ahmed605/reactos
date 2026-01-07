@@ -77,6 +77,9 @@ typedef struct _CDDPDEV
    VIDEOMEMORY* pvmList;
    BOOL bDDInitialized;
    DDPIXELFORMAT ddpfDisplay;
+
+   /* RDDM / Dxgkrnl interop (bring-up) */
+   D3DKMT_HANDLE hPrimaryAllocation;
 } CDDPDEV, *PCDDPDEV;
 
 #define DEVICE_NAME	L"cdd"

@@ -10,6 +10,7 @@
 #include <debug.h>
 #include <ntddk.h>  /* For CTL_CODE and other DDK macros */
 #include <reactos/rddm/rxgkinterface.h>
+#include <include/rxgkpostdisplay.h>
 
 #ifdef NONAMELESSUNION
 #define RXGK_IOSB_STATUS(_iosb) ((_iosb).u.Status)
@@ -44,11 +45,31 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1);
 
 NTSTATUS
 APIENTRY
+RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kLock(_In_ D3DKMT_LOCK* unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kUnlock(_In_ const D3DKMT_UNLOCK* unnamedParam1);
+
+NTSTATUS
+APIENTRY
 RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* unnamedParam1);
 
 NTSTATUS
 APIENTRY
 RxgkWin32kPresent(_In_ D3DKMT_PRESENT* unnamedParam1);
+
+NTSTATUS
+APIENTRY
+RxgkWin32kCreateAllocation(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1);
 
 NTSTATUS
 NTAPI
@@ -111,6 +132,11 @@ RxgkInternalDeviceControl(
                 Callbacks->RxgkIntPfnPresent = RxgkWin32kPresent;
                 Callbacks->RxgkIntPfnGetDisplayModeList = RxgkWin32kGetDisplayModeList;
                 Callbacks->RxgkIntPfnSetDisplayMode = RxgkWin32kSetDisplayMode;
+                Callbacks->RxgkIntPfnLock = RxgkWin32kLock;
+                Callbacks->RxgkIntPfnUnlock = RxgkWin32kUnlock;
+                Callbacks->RxgkIntPfnGetSharedPrimaryHandle = RxgkWin32kGetSharedPrimaryHandle;
+                Callbacks->RxgkIntPfnCddEnable = RxgkWin32kCddEnable;
+                Callbacks->RxgkIntPfnCreateAllocation = RxgkWin32kCreateAllocation;
 
                 Irp->IoStatus.Information = sizeof(*Callbacks);
                 RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;
@@ -145,7 +171,7 @@ RxgkUnused(
     PAGED_CODE();
     DPRINT("DxgkCreateClose: called\n");
     Irp->IoStatus.Information = 0;
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;
     IofCompleteRequest(Irp, 0);
     return STATUS_SUCCESS;
 }

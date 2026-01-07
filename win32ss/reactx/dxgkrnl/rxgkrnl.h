@@ -54,6 +54,7 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PDXGKDDI_PRESENTDISPLAYONLY              DxgkDdiPresentDisplayOnly;
 #endif
     PDXGKDDI_CREATEDEVICE                    DxgkDdiCreateDevice;
+    PDXGKDDI_CREATEALLOCATION                DxgkDdiCreateAllocation;
     // BUS
     BUS_INTERFACE_STANDARD BusInterface;
     ULONG BusInterruptLevel;
