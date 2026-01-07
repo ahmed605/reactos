@@ -37,39 +37,72 @@
 	CTL_CODE(FILE_DEVICE_VIDEO, 0xC, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 NTSTATUS
-RxgKmtQueryAdapterInfo(_Inout_ PVOID unnamedParam1);
+NTAPI
+RxgkWin32kOpenAdapter(_Inout_ D3DKMT_OPENADAPTERFROMHDC* Args);
 
 NTSTATUS
-APIENTRY
+NTAPI
+RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args);
+
+NTSTATUS
+NTAPI
+RxgkWin32kCloseAdapter(_In_ const D3DKMT_CLOSEADAPTER* Args);
+
+NTSTATUS
+NTAPI
+RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args);
+
+NTSTATUS
+NTAPI
 RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kLock(_In_ D3DKMT_LOCK* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kUnlock(_In_ const D3DKMT_UNLOCK* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kPresent(_In_ D3DKMT_PRESENT* unnamedParam1);
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kCreateAllocation(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1);
+
+NTSTATUS
+NTAPI
+RxgkWin32kEscape(_In_ const D3DKMT_ESCAPE* unnamedParam1);
+
+NTSTATUS
+NTAPI
+RxgkWin32kGetDeviceState(_Inout_ D3DKMT_GETDEVICESTATE* Args);
+
+NTSTATUS
+NTAPI
+RxgkWin32kQueryResourceInfo(_Inout_ D3DKMT_QUERYRESOURCEINFO* Args);
+
+NTSTATUS
+NTAPI
+RxgkWin32kOpenResource(_Inout_ D3DKMT_OPENRESOURCE* Args);
+
+NTSTATUS
+NTAPI
+RxgkWin32kDestroyAllocation(_In_ const D3DKMT_DESTROYALLOCATION* Args);
 
 NTSTATUS
 NTAPI
@@ -129,6 +162,7 @@ RxgkInternalDeviceControl(
                 }
 
                 RtlZeroMemory(Callbacks, sizeof(*Callbacks));
+                Callbacks->RxgkIntPfnOpenAdapter = RxgkWin32kOpenAdapter;
                 Callbacks->RxgkIntPfnPresent = RxgkWin32kPresent;
                 Callbacks->RxgkIntPfnGetDisplayModeList = RxgkWin32kGetDisplayModeList;
                 Callbacks->RxgkIntPfnSetDisplayMode = RxgkWin32kSetDisplayMode;
@@ -137,6 +171,14 @@ RxgkInternalDeviceControl(
                 Callbacks->RxgkIntPfnGetSharedPrimaryHandle = RxgkWin32kGetSharedPrimaryHandle;
                 Callbacks->RxgkIntPfnCddEnable = RxgkWin32kCddEnable;
                 Callbacks->RxgkIntPfnCreateAllocation = RxgkWin32kCreateAllocation;
+                Callbacks->RxgkIntPfnQueryAdapterInfo = RxgkWin32kQueryAdapterInfo;
+                Callbacks->RxgkIntPfnCloseAdapter = RxgkWin32kCloseAdapter;
+                Callbacks->RxgkIntPfnCreateDevice = (PDXGADAPTER_CREATEDEVICE)RxgkWin32kCreateDevice;
+                Callbacks->RxgkIntPfnEscape = RxgkWin32kEscape;
+                Callbacks->RxgkIntPfnGetDeviceState = RxgkWin32kGetDeviceState;
+                Callbacks->RxgkIntPfnQueryResourceInfo = RxgkWin32kQueryResourceInfo;
+                Callbacks->RxgkIntPfnOpenResource = RxgkWin32kOpenResource;
+                Callbacks->RxgkIntPfnDestroyAllocation = RxgkWin32kDestroyAllocation;
 
                 Irp->IoStatus.Information = sizeof(*Callbacks);
                 RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;

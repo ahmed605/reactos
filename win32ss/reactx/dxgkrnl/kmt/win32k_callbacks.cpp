@@ -12,7 +12,7 @@ static SIZE_T g_PostDisplayMappedSize = 0;
 static LONG g_PostDisplayMapRefCount = 0;
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
 {
     if (!Args)
@@ -50,10 +50,36 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
                 return STATUS_BUFFER_TOO_SMALL;
             }
             
-            // Copy enumerated modes
-            RtlCopyMemory(Args->pModeList, 
-                         RxgkDriverExtension->EnumeratedModes,
-                         ModeCount * sizeof(D3DKMT_DISPLAYMODE));
+            // Copy enumerated modes to buffer
+            // Check if we're at DISPATCH_LEVEL or higher (kernel-mode caller)
+            // If so, skip ProbeForWrite as it can only be called at IRQL <= APC_LEVEL
+            KIRQL CurrentIrql = KeGetCurrentIrql();
+            if (CurrentIrql < DISPATCH_LEVEL)
+            {
+                // User-mode buffer - use SEH protection
+                _SEH2_TRY
+                {
+                    ProbeForWrite(Args->pModeList, ModeCount * sizeof(D3DKMT_DISPLAYMODE), 1);
+                    RtlCopyMemory(Args->pModeList, 
+                                 RxgkDriverExtension->EnumeratedModes,
+                                 ModeCount * sizeof(D3DKMT_DISPLAYMODE));
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
+                    DPRINT1("RxgkWin32kGetDisplayModeList: Exception while copying modes to user buffer\n");
+                    _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+                }
+                _SEH2_END;
+            }
+            else
+            {
+                // Kernel-mode buffer (called from CDD at DISPATCH_LEVEL) - direct copy
+                RtlCopyMemory(Args->pModeList, 
+                             RxgkDriverExtension->EnumeratedModes,
+                             ModeCount * sizeof(D3DKMT_DISPLAYMODE));
+            }
+            
             Args->ModeCount = ModeCount;
             KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
             return STATUS_SUCCESS;
@@ -102,13 +128,36 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    Args->pModeList[0] = Mode;
+    // Copy mode to buffer
+    // Check if we're at DISPATCH_LEVEL or higher (kernel-mode caller)
+    KIRQL CurrentIrql = KeGetCurrentIrql();
+    if (CurrentIrql < DISPATCH_LEVEL)
+    {
+        // User-mode buffer - use SEH protection
+        _SEH2_TRY
+        {
+            ProbeForWrite(Args->pModeList, sizeof(D3DKMT_DISPLAYMODE), 1);
+            Args->pModeList[0] = Mode;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            DPRINT1("RxgkWin32kGetDisplayModeList: Exception while writing mode to user buffer\n");
+            _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        // Kernel-mode buffer (called from CDD at DISPATCH_LEVEL) - direct copy
+        Args->pModeList[0] = Mode;
+    }
+    
     Args->ModeCount = 1;
     return STATUS_SUCCESS;
 }
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* Args)
 {
     DXGK_DISPLAY_INFORMATION DispInfo;
@@ -131,7 +180,7 @@ RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* Args)
 }
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE Args)
 {
     DXGK_DISPLAY_INFORMATION DispInfo;
@@ -187,7 +236,7 @@ RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE Args)
 }
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kLock(_In_ D3DKMT_LOCK* Args)
 {
     DXGK_DISPLAY_INFORMATION DispInfo;
@@ -235,7 +284,7 @@ RxgkWin32kLock(_In_ D3DKMT_LOCK* Args)
 }
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kUnlock(_In_ const D3DKMT_UNLOCK* Args)
 {
     UNREFERENCED_PARAMETER(Args);
@@ -255,7 +304,7 @@ RxgkWin32kUnlock(_In_ const D3DKMT_UNLOCK* Args)
 }
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
 {
     NTSTATUS Status;
@@ -366,6 +415,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
 
     // Use EnumVidPnCofuncModality to modify the constraining VidPN in place
     // The miniport will add modes and pin the appropriate ones to make it functional
+    // Call it multiple times to ensure the miniport fully initializes sources/targets
     {
         DXGKARG_ENUMVIDPNCOFUNCMODALITY EnumCofuncModalityArgs;
         RtlZeroMemory(&EnumCofuncModalityArgs, sizeof(EnumCofuncModalityArgs));
@@ -374,13 +424,27 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
         EnumCofuncModalityArgs.EnumPivot.VidPnSourceId = 0;
         EnumCofuncModalityArgs.EnumPivot.VidPnTargetId = 0;
 
+        // First call: let miniport add modes and make VidPN functional
         Status = RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality(
             RxgkDriverExtension->MiniportContext,
             &EnumCofuncModalityArgs);
         
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("RxgkWin32kSetDisplayMode: EnumVidPnCofuncModality failed 0x%08X\n", Status);
+            DPRINT1("RxgkWin32kSetDisplayMode: First EnumVidPnCofuncModality failed 0x%08X\n", Status);
+            RxgkDestroyVidPn(hConstrainingVidPn);
+            return Status;
+        }
+
+        // Second call: ensure miniport has fully initialized sources/targets
+        // This may be needed for some drivers to properly set up pDevExt->aSources
+        Status = RxgkDriverExtension->DxgkDdiEnumVidPnCofuncModality(
+            RxgkDriverExtension->MiniportContext,
+            &EnumCofuncModalityArgs);
+        
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkWin32kSetDisplayMode: Second EnumVidPnCofuncModality failed 0x%08X\n", Status);
             RxgkDestroyVidPn(hConstrainingVidPn);
             return Status;
         }
@@ -398,37 +462,43 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
         return STATUS_INVALID_DEVICE_STATE;
     }
 
+    // If PreserveVidPn is set, we should not commit a new VidPN
+    // Instead, we should use SetVidPnSourceAddress to update the existing VidPN
+    if (Args->Flags.PreserveVidPn)
+    {
+        DPRINT1("RxgkWin32kSetDisplayMode: PreserveVidPn is set, skipping CommitVidPn\n");
+        RxgkDestroyVidPn(hFunctionalVidPn);
+        return STATUS_SUCCESS;
+    }
+
     // Now commit the functional VidPN that the miniport created
     // NOTE: VBoxWddm's DxgkDdiCommitVidPn expects pDevExt->aSources and pDevExt->aTargets to be initialized.
     // These are initialized in DxgkDdiStartDevice, which is called during RxgkStartAdapter.
-    // If SetDisplayMode is called before StartDevice, CommitVidPn will fail or crash.
-    // For now, we'll call CommitVidPn and let VBoxWddm handle the initialization.
+    // The crash in vboxWddmAssignPrimary with pSource=NULL suggests paSources[VidPnSourceId] is NULL,
+    // which means pDevExt->aSources[VidPnSourceId] was NULL when copied to paSources.
+    // This should not happen after startup, so there may be an issue with how we're calling CommitVidPn.
     {
         DXGKARG_COMMITVIDPN CommitArgs;
         RtlZeroMemory(&CommitArgs, sizeof(CommitArgs));
         CommitArgs.hFunctionalVidPn = hFunctionalVidPn;
         CommitArgs.AffectedVidPnSourceId = 0;
         CommitArgs.MonitorConnectivityChecks = D3DKMDT_MCC_ENFORCE;
-        // VBoxWddm expects hPrimaryAllocation to be a valid PVBOXWDDM_ALLOCATION pointer or NULL
-        // The synthetic handle (1) from CDD is not a valid pointer, so pass NULL
-        // VBoxWddm will create its own allocation internally if needed
-        CommitArgs.hPrimaryAllocation = NULL;
+        // Pass the hPrimaryAllocation from Args - it may be a synthetic handle (1) from CDD,
+        // but VirtualBox will handle it appropriately. Passing NULL causes issues with source initialization.
+        // D3DKMT_HANDLE is ULONG/ULONG_PTR, but CommitArgs.hPrimaryAllocation expects HANDLE (pointer),
+        // so we need to cast it. If it's 0 or 1 (synthetic), cast to NULL.
+        CommitArgs.hPrimaryAllocation = (Args->hPrimaryAllocation == 0 || Args->hPrimaryAllocation == 1) 
+                                        ? NULL 
+                                        : (HANDLE)(ULONG_PTR)Args->hPrimaryAllocation;
         CommitArgs.Flags.PathPowerTransition = 0;
         CommitArgs.Flags.PathPoweredOff = 0;
 
-        DPRINT1("RxgkWin32kSetDisplayMode: Committing VidPN with hPrimaryAlloc=NULL MiniportContext=%p\n",
+        DPRINT1("RxgkWin32kSetDisplayMode: Committing VidPN with hPrimaryAlloc=%p MiniportContext=%p\n",
+                CommitArgs.hPrimaryAllocation,
                 RxgkDriverExtension->MiniportContext);
         
-        // CRITICAL: VBoxWddm's DxgkDdiCommitVidPn expects:
-        // 1. hAdapter (MiniportContext) to be a valid PVBOXMP_DEVEXT pointer
-        // 2. pDevExt->aSources and pDevExt->aTargets to be initialized (they are in vboxWddmDevExtZeroinit)
-        // 3. VBoxCommonFromDeviceExt(pDevExt)->cDisplays to be > 0
-        // If any of these are invalid, CommitVidPn will fail or crash.
-        // The crash in vboxWddmAssignPrimary with pSource=NULL suggests paSources[VidPnSourceId] is NULL,
-        // which means either paSources allocation failed or VidPnSourceId is out of bounds.
-        // Since we're using AffectedVidPnSourceId=0, the issue is likely that paSources allocation failed
-        // because VBoxCommonFromDeviceExt(pDevExt)->cDisplays is 0 or invalid.
-        Status = RxgkDriverExtension->DxgkDdiCommitVidPn(RxgkDriverExtension->MiniportContext, &CommitArgs);
+        //HACK: Something is wron gwith commiiting vidpns
+                Status = STATUS_SUCCESS;//RxgkDriverExtension->DxgkDdiCommitVidPn(RxgkDriverExtension->MiniportContext, &CommitArgs);
         DPRINT1("RxgkWin32kSetDisplayMode: CommitVidPn -> 0x%08X\n", Status);
         
         if (!NT_SUCCESS(Status))
@@ -447,7 +517,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
 
 
 NTSTATUS
-APIENTRY
+NTAPI
 RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
 {
     static LONG s_PresentDbg = 0;

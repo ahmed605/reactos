@@ -134,11 +134,23 @@ InitDisplayDriver(
     cbSize = sizeof(awcBuffer) - cbSize;
 
     /* Query the device string */
+    /* Try "Device Description" first, then fall back to "HardwareInformation.AdapterString" */
     Status = RegQueryValue(hkey,
                            L"Device Description",
                            REG_SZ,
                            ustrDescription.Buffer,
                            &cbSize);
+    if (!NT_SUCCESS(Status))
+    {
+        /* Fall back to HardwareInformation.AdapterString */
+        cbSize = sizeof(awcBuffer) - (ustrDescription.Buffer - awcBuffer) * sizeof(WCHAR);
+        Status = RegQueryValue(hkey,
+                               L"HardwareInformation.AdapterString",
+                               REG_SZ,
+                               ustrDescription.Buffer,
+                               &cbSize);
+    }
+    
     if (NT_SUCCESS(Status))
     {
         ustrDescription.MaximumLength = (USHORT)cbSize;
@@ -162,9 +174,144 @@ InitDisplayDriver(
     pGraphicsDevice = EngpRegisterGraphicsDevice(&ustrDeviceName,
                                                  &ustrDisplayDrivers,
                                                  &ustrDescription);
-    if (pGraphicsDevice && dwVga)
+    if (pGraphicsDevice)
     {
-        pGraphicsDevice->StateFlags |= DISPLAY_DEVICE_VGA_COMPATIBLE;
+        if (dwVga)
+        {
+            pGraphicsDevice->StateFlags |= DISPLAY_DEVICE_VGA_COMPATIBLE;
+        }
+
+        /* Try to read adapter description from driver registry key if we have the PDO */
+        /* For RDDM, PhysDeviceHandle might be NULL, so try to get PDO from device object stack */
+        PDEVICE_OBJECT PdoToUse = pGraphicsDevice->PhysDeviceHandle;
+        
+        if (!PdoToUse && pGraphicsDevice->DeviceObject)
+        {
+            /* Try to get PDO from device object stack */
+            PDEVICE_OBJECT CurrentDevice = pGraphicsDevice->DeviceObject;
+            PDEVICE_OBJECT LowerDevice = NULL;
+            
+            TRACE("InitDisplayDriver: PhysDeviceHandle is NULL, traversing device stack from %p\n", CurrentDevice);
+            
+            /* Traverse down the device stack to find the PDO */
+            while (CurrentDevice)
+            {
+                TRACE("InitDisplayDriver: Checking device %p, Flags=0x%x\n", CurrentDevice, CurrentDevice->Flags);
+                
+                if (CurrentDevice->Flags & DO_BUS_ENUMERATED_DEVICE)
+                {
+                    PdoToUse = CurrentDevice;
+                    ObReferenceObject(PdoToUse);
+                    TRACE("InitDisplayDriver: Found PDO at %p\n", PdoToUse);
+                    break;
+                }
+                
+                /* Get the lower device object */
+                if (CurrentDevice->DeviceObjectExtension)
+                {
+                    PEXTENDED_DEVOBJ_EXTENSION Ext = (PEXTENDED_DEVOBJ_EXTENSION)CurrentDevice->DeviceObjectExtension;
+                    LowerDevice = Ext->AttachedTo;
+                    if (LowerDevice)
+                    {
+                        ObReferenceObject(LowerDevice);
+                        if (CurrentDevice != pGraphicsDevice->DeviceObject)
+                        {
+                            ObDereferenceObject(CurrentDevice);
+                        }
+                        CurrentDevice = LowerDevice;
+                    }
+                    else
+                    {
+                        TRACE("InitDisplayDriver: No lower device found\n");
+                        break;
+                    }
+                }
+                else
+                {
+                    TRACE("InitDisplayDriver: No device extension found\n");
+                    break;
+                }
+            }
+            
+            if (CurrentDevice && CurrentDevice != pGraphicsDevice->DeviceObject && CurrentDevice != PdoToUse)
+            {
+                ObDereferenceObject(CurrentDevice);
+            }
+        }
+        
+        if (PdoToUse)
+        {
+            HANDLE DriverKeyHandle = NULL;
+            NTSTATUS DriverKeyStatus;
+            WCHAR DriverDescBuffer[128];
+            ULONG DriverDescSize = sizeof(DriverDescBuffer);
+
+            TRACE("InitDisplayDriver: Opening driver registry key for PDO %p\n", PdoToUse);
+            
+            /* Try to open the driver registry key */
+            DriverKeyStatus = IoOpenDeviceRegistryKey(
+                PdoToUse,
+                PLUGPLAY_REGKEY_DRIVER,
+                KEY_READ,
+                &DriverKeyHandle);
+
+            if (NT_SUCCESS(DriverKeyStatus))
+            {
+                TRACE("InitDisplayDriver: Successfully opened driver registry key\n");
+                
+                /* Try to read HardwareInformation.AdapterString from driver registry key */
+                DriverKeyStatus = RegQueryValue(DriverKeyHandle,
+                                                L"HardwareInformation.AdapterString",
+                                                REG_SZ,
+                                                DriverDescBuffer,
+                                                &DriverDescSize);
+
+                if (NT_SUCCESS(DriverKeyStatus) && DriverDescSize > sizeof(WCHAR))
+                {
+                    TRACE("InitDisplayDriver: Read HardwareInformation.AdapterString='%ls' (size=%lu)\n", 
+                          DriverDescBuffer, DriverDescSize);
+                    
+                    /* Update the description if we got a valid value */
+                    SIZE_T NewDescLen = (DriverDescSize / sizeof(WCHAR)) - 1;
+                    if (NewDescLen > 0 && pGraphicsDevice->pwszDescription)
+                    {
+                        SIZE_T MaxDescLen = wcslen(pGraphicsDevice->pwszDescription);
+                        if (NewDescLen <= MaxDescLen)
+                        {
+                            RtlCopyMemory(pGraphicsDevice->pwszDescription,
+                                         DriverDescBuffer,
+                                         NewDescLen * sizeof(WCHAR));
+                            pGraphicsDevice->pwszDescription[NewDescLen] = L'\0';
+                            TRACE("InitDisplayDriver: Updated description to '%ls'\n", pGraphicsDevice->pwszDescription);
+                        }
+                        else
+                        {
+                            TRACE("InitDisplayDriver: Description too long (%Iu > %Iu)\n", NewDescLen, MaxDescLen);
+                        }
+                    }
+                }
+                else
+                {
+                    TRACE("InitDisplayDriver: Failed to read HardwareInformation.AdapterString, status=0x%lx\n", DriverKeyStatus);
+                }
+
+                ZwClose(DriverKeyHandle);
+            }
+            else
+            {
+                TRACE("InitDisplayDriver: Failed to open driver registry key, status=0x%lx\n", DriverKeyStatus);
+            }
+            
+            /* Dereference the PDO if we got it from the stack */
+            if (PdoToUse != pGraphicsDevice->PhysDeviceHandle)
+            {
+                ObDereferenceObject(PdoToUse);
+            }
+        }
+        else
+        {
+            TRACE("InitDisplayDriver: No PDO available to read adapter description\n");
+        }
     }
 
     return pGraphicsDevice;

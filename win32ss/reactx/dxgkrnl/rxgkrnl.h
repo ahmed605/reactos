@@ -89,6 +89,9 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PD3DKMT_DISPLAYMODE pDesiredMode;
     BOOLEAN DesiredModeValid;
     KSPIN_LOCK DesiredModeLock; // Protects pDesiredMode and DesiredModeValid
+    
+    // Adapter GUID (created during StartAdapter, used for KMTQAITYPE_ADAPTERGUID query)
+    GUID AdapterGuid;
 
 } RXGK_PRIVATE_EXTENSION, *PRXGK_PRIVATE_EXTENSION;
 

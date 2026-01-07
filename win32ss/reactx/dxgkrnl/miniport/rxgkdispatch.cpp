@@ -323,6 +323,8 @@ RxgkStartAdapter()
         DxgkStartInfo.AdapterGuid.Data3 = 0x5678;
         RtlCopyMemory(DxgkStartInfo.AdapterGuid.Data4, "FALLBACK", 8);
     }
+    /* Store the adapter GUID for KMTQAITYPE_ADAPTERGUID queries */
+    RxgkDriverExtension->AdapterGuid = DxgkStartInfo.AdapterGuid;
     /* Dxgkrnl Callbacks */
     /* Interrupt routine information*/
     RxgkSetupInterrupts();

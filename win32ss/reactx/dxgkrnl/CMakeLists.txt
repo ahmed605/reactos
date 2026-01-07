@@ -17,6 +17,10 @@ list(APPEND SOURCE
      kmt/win32k_callbacks.cpp
      kmt/d3dkmt_test.cpp
      kmt/allocation.cpp
+     kmt/adapter.cpp
+     kmt/device.cpp
+     kmt/devicestate.cpp
+     kmt/escape.cpp
      )
 
 add_library(dxgkrnl MODULE

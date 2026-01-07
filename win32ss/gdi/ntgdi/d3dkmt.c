@@ -167,7 +167,14 @@ APIENTRY
 NtGdiDdDDIOpenAdapterFromHdc(_Inout_ D3DKMT_OPENADAPTERFROMHDC* unnamedParam1)
 {
     DPRINT1("D3DKmtOpenAdapterFromHdc: pData=%p\n", unnamedParam1);
-    return STATUS_PROCEDURE_NOT_FOUND;
+    
+    if (!unnamedParam1)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!DxgAdapterCallbacks.RxgkIntPfnOpenAdapter)
+        return STATUS_PROCEDURE_NOT_FOUND;
+
+    return DxgAdapterCallbacks.RxgkIntPfnOpenAdapter(unnamedParam1);
 }
 
 
@@ -282,14 +289,30 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateDevice(_Inout_ D3DKMT_CREATEDEVICE* unnamedParam1)
 {
+    NTSTATUS Status;
     DPRINT1("D3DKmtCreateDevice: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+    {
+        DPRINT1("D3DKmtCreateDevice: Invalid parameter\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DPRINT1("D3DKmtCreateDevice: hAdapter=%p Flags.LegacyMode=%u Flags.RequestVSync=%u\n",
+            (PVOID)(ULONG_PTR)unnamedParam1->hAdapter,
+            unnamedParam1->Flags.LegacyMode,
+            unnamedParam1->Flags.RequestVSync);
 
     if (!DxgAdapterCallbacks.RxgkIntPfnCreateDevice)
+    {
+        DPRINT1("D3DKmtCreateDevice: Callback not registered!\n");
         return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
-    return DxgAdapterCallbacks.RxgkIntPfnCreateDevice(unnamedParam1);
+    DPRINT1("D3DKmtCreateDevice: Calling dxgkrnl callback\n");
+    Status = DxgAdapterCallbacks.RxgkIntPfnCreateDevice(unnamedParam1);
+    DPRINT1("D3DKmtCreateDevice: Status=0x%08X hDevice=%p\n", 
+            Status, (PVOID)(ULONG_PTR)(unnamedParam1 ? unnamedParam1->hDevice : 0));
+    return Status;
 }
 
 NTSTATUS
@@ -520,14 +543,21 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1)
 {
+    NTSTATUS Status;
     DPRINT1("D3DKmtGetSharedPrimaryHandle: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
 
     if (!DxgAdapterCallbacks.RxgkIntPfnGetSharedPrimaryHandle)
+    {
+        DPRINT1("D3DKmtGetSharedPrimaryHandle: Callback not found\n");
         return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
-    return DxgAdapterCallbacks.RxgkIntPfnGetSharedPrimaryHandle(unnamedParam1);
+    Status = DxgAdapterCallbacks.RxgkIntPfnGetSharedPrimaryHandle(unnamedParam1);
+    DPRINT1("D3DKmtGetSharedPrimaryHandle: Status=0x%08X hSharedPrimary=%p\n", 
+            Status, (PVOID)(ULONG_PTR)(unnamedParam1 ? unnamedParam1->hSharedPrimary : 0));
+    return Status;
 }
 
 NTSTATUS
@@ -632,14 +662,20 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryResourceInfo(_Inout_ D3DKMT_QUERYRESOURCEINFO* unnamedParam1)
 {
+    NTSTATUS Status;
     DPRINT1("D3DKmtQueryResourceInfo: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
 
     if (!DxgAdapterCallbacks.RxgkIntPfnQueryResourceInfo)
+    {
+        DPRINT1("D3DKmtQueryResourceInfo: Callback not found\n");
         return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
-    return DxgAdapterCallbacks.RxgkIntPfnQueryResourceInfo(unnamedParam1);
+    Status = DxgAdapterCallbacks.RxgkIntPfnQueryResourceInfo(unnamedParam1);
+    DPRINT1("D3DKmtQueryResourceInfo: Status=0x%08X\n", Status);
+    return Status;
 }
 
 NTSTATUS
