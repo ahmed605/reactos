@@ -45,6 +45,7 @@ typedef enum _W32PROF_TEST_ID
     W32PROF_TEST_GL11_CUBE,
     W32PROF_TEST_GL20_CUBE,
     W32PROF_TEST_GL42_CUBE,
+    W32PROF_TEST_GL20_TRIANGLE_MANUAL,
 
     W32PROF_TEST_D3D7_TEX_CUBE,
     W32PROF_TEST_D3D7_TEX_CUBE_FS,
@@ -121,6 +122,7 @@ void W32Prof_Test_GL20Cube(const ProfilerConfig* cfg);
 void W32Prof_Test_D3D7Cube(const ProfilerConfig* cfg);
 void W32Prof_Test_D3D8Cube(const ProfilerConfig* cfg);
 void W32Prof_Test_GL42Cube(const ProfilerConfig* cfg);
+void W32Prof_Test_GL20TriangleManual(const ProfilerConfig* cfg);
 
 void W32Prof_Test_D3D7TexturedCube(const ProfilerConfig* cfg);
 void W32Prof_Test_D3D7TexturedCubeFullscreen(const ProfilerConfig* cfg);

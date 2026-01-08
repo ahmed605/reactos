@@ -355,6 +355,15 @@ DrvStretchBltROP(_Inout_  SURFOBJ         *psoDest,
                  _In_     BRUSHOBJ        *pbo,
                  _In_     DWORD            rop4);
 
+ULONG
+APIENTRY
+DrvEscape(_In_  SURFOBJ *pso,
+          _In_  ULONG   iEsc,
+          _In_  ULONG   cjIn,
+          _In_  PVOID   pvIn,
+          _In_  ULONG   cjOut,
+          _Out_ PVOID   pvOut);
+
 BOOL
 APIENTRY
 DrvPlgBlt(_Inout_  SURFOBJ         *psoTrg,

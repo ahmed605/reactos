@@ -2,6 +2,7 @@
 #include "cdd.h"
 #include <debug.h>
 #include <reactos/rddm/rxgkinterface.h>
+#include <ntstrsafe.h>
 
 #define IOCTL_VIDEO_GIVE_CALLSBACK \
    CTL_CODE(FILE_DEVICE_VIDEO, 0xC, METHOD_NEITHER, FILE_ANY_ACCESS)
@@ -992,6 +993,7 @@ DrvMovePointer(
    if (pso)
       (void)CddPresent(pso->dhpdev, prcl);
 }
+
 
 BOOL
 APIENTRY

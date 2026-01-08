@@ -31,6 +31,7 @@ list(APPEND SOURCE
     test_gl11_textured.c
     test_gl11_textured_fs.c
     test_gl20.c
+    test_gl20_triangle_manual.c
     test_gl20_textured.c
     test_gl42.c
     test_gl42_textured.c

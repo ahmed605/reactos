@@ -499,10 +499,13 @@ NtGdiDdDDIGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* unna
 {
     DPRINT1("D3DKmtGetMultisampleMethodList: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
 
     if (!DxgAdapterCallbacks.RxgkIntPfnGetMultisampleMethodList)
+    {
+        DPRINT1("D3DKmtGetMultisampleMethodList: RxgkIntPfnGetMultisampleMethodList is NULL\n");
         return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
     return DxgAdapterCallbacks.RxgkIntPfnGetMultisampleMethodList(unnamedParam1);
 }
@@ -644,14 +647,38 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* unnamedParam1)
 {
+    NTSTATUS Status;
+    D3DKMT_QUERYADAPTERINFO Local;
+
     DPRINT1("D3DKmtQueryAdapterInfo: pData=%p\n", unnamedParam1);
     if (!unnamedParam1)
-        STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(&Local, sizeof(Local));
+    _SEH2_TRY
+    {
+        ProbeForRead(unnamedParam1, sizeof(*unnamedParam1), sizeof(ULONG));
+        RtlCopyMemory(&Local, unnamedParam1, sizeof(Local));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT1("D3DKmtQueryAdapterInfo: exception reading args\n");
+        _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+    }
+    _SEH2_END;
+
+    DPRINT1("D3DKmtQueryAdapterInfo: hAdapter=%p Type=%u PrivateDataSize=%u pPrivateDriverData=%p\n",
+            (PVOID)(ULONG_PTR)Local.hAdapter,
+            (UINT)Local.Type,
+            (UINT)Local.PrivateDriverDataSize,
+            Local.pPrivateDriverData);
 
     if (!DxgAdapterCallbacks.RxgkIntPfnQueryAdapterInfo)
         return STATUS_PROCEDURE_NOT_FOUND;
 
-    return DxgAdapterCallbacks.RxgkIntPfnQueryAdapterInfo(unnamedParam1);
+    Status = DxgAdapterCallbacks.RxgkIntPfnQueryAdapterInfo(unnamedParam1);
+    DPRINT1("D3DKmtQueryAdapterInfo: -> Status=0x%08X\n", Status);
+    return Status;
 }
 
 NTSTATUS

@@ -561,9 +561,16 @@ PDEVOBJ_Create(
     ppdev->pldev = pldev;
     ppdev->dwAccelerationLevel = dwAccelerationLevel;
 
-    /* Copy the function table */
-    if (ldevtype == LDEV_DEVICE_DISPLAY && (dwAccelerationLevel >= 5 ||
-        pdm->dmFields & (DM_PANNINGWIDTH | DM_PANNINGHEIGHT)))
+    /*
+     * Copy the function table.
+     *
+     * Important: The PanDisp wrapper is only for real panning modes.
+     * Do NOT enable it based on Acceleration.Level: doing so drops entries like
+     * DrvEscape, making ExtEscape(OPENGL_GETINFO) fail and forcing OpenGL to
+     * fall back to GDI Generic.
+     */
+    if (ldevtype == LDEV_DEVICE_DISPLAY &&
+        (pdm->dmFields & (DM_PANNINGWIDTH | DM_PANNINGHEIGHT)))
     {
         ULONG i;
 

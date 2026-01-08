@@ -160,6 +160,56 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
 
 NTSTATUS
 NTAPI
+RxgkWin32kGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* Args)
+{
+    D3DKMT_MULTISAMPLEMETHOD Local;
+
+    if (!Args)
+        return STATUS_INVALID_PARAMETER;
+
+    DPRINT1("RxgkWin32kGetMultisampleMethodList: hAdapter=%p SourceId=%lu %ux%u fmt=%u MethodCount(in)=%u pMethodList=%p\n",
+            (PVOID)(ULONG_PTR)Args->hAdapter,
+            (ULONG)Args->VidPnSourceId,
+            (UINT)Args->Width,
+            (UINT)Args->Height,
+            (UINT)Args->Format,
+            (UINT)Args->MethodCount,
+            Args->pMethodList);
+
+    /*
+     * Reference behavior (Vista dxgkrnl): MethodCount is in/out and can be queried without a buffer.
+     * Minimal safe behavior for now: report "no MSAA" as one entry: 1 sample, 1 quality.
+     */
+    Local.NumSamples = 1;
+    Local.NumQualityLevels = 1;
+    Local.Reserved = 0;
+
+    if (!Args->pMethodList || Args->MethodCount == 0)
+    {
+        Args->MethodCount = 1;
+        return STATUS_SUCCESS;
+    }
+
+    if (Args->MethodCount < 1)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(Args->pMethodList, sizeof(D3DKMT_MULTISAMPLEMETHOD), sizeof(ULONG));
+        RtlCopyMemory(Args->pMethodList, &Local, sizeof(Local));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+    }
+    _SEH2_END;
+
+    Args->MethodCount = 1;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
 RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* Args)
 {
     DXGK_DISPLAY_INFORMATION DispInfo;

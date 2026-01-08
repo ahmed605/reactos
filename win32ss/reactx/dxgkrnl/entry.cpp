@@ -69,6 +69,10 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1);
 
 NTSTATUS
 NTAPI
+RxgkWin32kGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* Args);
+
+NTSTATUS
+NTAPI
 RxgkWin32kGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1);
 
 NTSTATUS
@@ -177,6 +181,7 @@ RxgkInternalDeviceControl(
                 Callbacks->RxgkIntPfnPresent = RxgkWin32kPresent;
                 Callbacks->RxgkIntPfnGetDisplayModeList = RxgkWin32kGetDisplayModeList;
                 Callbacks->RxgkIntPfnSetDisplayMode = RxgkWin32kSetDisplayMode;
+                Callbacks->RxgkIntPfnGetMultisampleMethodList = RxgkWin32kGetMultisampleMethodList;
                 Callbacks->RxgkIntPfnLock = RxgkWin32kLock;
                 Callbacks->RxgkIntPfnUnlock = RxgkWin32kUnlock;
                 Callbacks->RxgkIntPfnGetSharedPrimaryHandle = RxgkWin32kGetSharedPrimaryHandle;
@@ -193,6 +198,12 @@ RxgkInternalDeviceControl(
                 Callbacks->RxgkIntPfnQueryResourceInfo = RxgkWin32kQueryResourceInfo;
                 Callbacks->RxgkIntPfnOpenResource = RxgkWin32kOpenResource;
                 Callbacks->RxgkIntPfnDestroyAllocation = RxgkWin32kDestroyAllocation;
+
+                DPRINT1("Callbacks: GetMultisampleMethodList=%p GetDisplayModeList=%p QueryAdapterInfo=%p Escape=%p\n",
+                        Callbacks->RxgkIntPfnGetMultisampleMethodList,
+                        Callbacks->RxgkIntPfnGetDisplayModeList,
+                        Callbacks->RxgkIntPfnQueryAdapterInfo,
+                        Callbacks->RxgkIntPfnEscape);
 
                 Irp->IoStatus.Information = sizeof(*Callbacks);
                 RXGK_IOSB_STATUS(Irp->IoStatus) = STATUS_SUCCESS;

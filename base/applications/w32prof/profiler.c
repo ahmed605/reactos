@@ -42,6 +42,7 @@ static const W32PROF_TEST_ENTRY g_Tests[] =
     { W32PROF_TEST_GL11_CUBE,     TEXT("OpenGL 1.1 Cube"),   TEXT("Create WGL context (fixed pipeline) and render a spinning cube") },
     { W32PROF_TEST_GL20_CUBE,     TEXT("OpenGL 2.0 Cube"),   TEXT("Create WGL context + GLSL program and render a spinning cube") },
     { W32PROF_TEST_GL42_CUBE,     TEXT("OpenGL 4.2 Cube"),   TEXT("Create a 4.2 context (best-effort) and render a spinning cube") },
+    { W32PROF_TEST_GL20_TRIANGLE_MANUAL, TEXT("OpenGL 2.0 Triangle (Manual/ICD preload)"), TEXT("Preload VBoxICD/VBoxGL, manually resolve WGL/GL2 procs, draw a triangle") },
 
     { W32PROF_TEST_D3D7_TEX_CUBE,    TEXT("Direct3D7 Textured Cube"), TEXT("D3D7 device textured cube (embedded TGA)") },
     { W32PROF_TEST_D3D7_TEX_CUBE_FS, TEXT("Direct3D7 Textured Cube (Fullscreen)"), TEXT("Exclusive fullscreen D3D7 textured cube (embedded TGA)") },
@@ -851,6 +852,10 @@ RunTestBody(const ProfilerConfig* cfg, W32PROF_TEST_ID id, LONGLONG freq)
 
         case W32PROF_TEST_GL42_CUBE:
             W32Prof_Test_GL42Cube(cfg);
+            break;
+
+        case W32PROF_TEST_GL20_TRIANGLE_MANUAL:
+            W32Prof_Test_GL20TriangleManual(cfg);
             break;
 
         case W32PROF_TEST_D3D7_TEX_CUBE:

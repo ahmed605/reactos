@@ -362,260 +362,206 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
         case KMTQAITYPE_UMOPENGLINFO:
         {
             DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_UMOPENGLINFO\n");
-            // This query type requests OpenGL ICD information
-            // Returns D3DKMT_OPENGLINFO structure
-            if (Args->PrivateDriverDataSize < sizeof(D3DKMT_OPENGLINFO))
-            {
-                DPRINT1("RxgkWin32kQueryAdapterInfo: Buffer too small for UMOPENGLINFO\n");
-                return STATUS_BUFFER_TOO_SMALL;
-            }
-            
-            D3DKMT_OPENGLINFO* OpenGlInfo = (D3DKMT_OPENGLINFO*)Args->pPrivateDriverData;
-            RtlZeroMemory(OpenGlInfo, sizeof(D3DKMT_OPENGLINFO));
-            
-            // Query OpenGL ICD information from the adapter's registry key
+            /* Reference behavior (see ReverseEngineredRefs/.../dxgkrnl.c): strict size match. */
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_OPENGLINFO))
+                return STATUS_INVALID_PARAMETER;
+
+            D3DKMT_OPENGLINFO LocalInfo;
+            RtlZeroMemory(&LocalInfo, sizeof(LocalInfo));
+
+            /* Query OpenGL ICD information from the adapter's registry key (driver key). */
             if (RxgkDriverExtension && RxgkDriverExtension->MiniportPdo)
             {
                 NTSTATUS RegStatus;
                 HANDLE AdapterKeyHandle = NULL;
-                UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"OpenGLDriverName");
                 PKEY_VALUE_PARTIAL_INFORMATION KeyInfo = NULL;
-                ULONG KeyInfoSize = 0;
                 ULONG ResultLength = 0;
-                
-                // Try to open the adapter's registry key
-                RegStatus = IoOpenDeviceRegistryKey(
-                    RxgkDriverExtension->MiniportPdo,
-                    PLUGPLAY_REGKEY_DRIVER,
-                    KEY_READ,
-                    &AdapterKeyHandle);
-                
+
+                RegStatus = IoOpenDeviceRegistryKey(RxgkDriverExtension->MiniportPdo,
+                                                    PLUGPLAY_REGKEY_DRIVER,
+                                                    KEY_READ,
+                                                    &AdapterKeyHandle);
                 if (NT_SUCCESS(RegStatus))
                 {
-                    // Query the OpenGLDriverName value (REG_MULTI_SZ)
-                    // First, get the size
-                    RegStatus = ZwQueryValueKey(
-                        AdapterKeyHandle,
-                        &ValueName,
-                        KeyValuePartialInformation,
-                        NULL,
-                        0,
-                        &ResultLength);
-                    
-                    if (RegStatus == STATUS_BUFFER_TOO_SMALL && ResultLength > 0)
+                    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"OpenGLDriverName");
+
+                    RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                &ValueName,
+                                                KeyValuePartialInformation,
+                                                NULL,
+                                                0,
+                                                &ResultLength);
+                    if ((RegStatus == STATUS_BUFFER_TOO_SMALL || RegStatus == STATUS_BUFFER_OVERFLOW) && ResultLength)
                     {
-                        KeyInfoSize = ResultLength;
-                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(
-                            PagedPool, KeyInfoSize, 'RXGK');
-                        
+                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(PagedPool,
+                                                                                         ResultLength,
+                                                                                         'RXGK');
                         if (KeyInfo)
                         {
-                            RegStatus = ZwQueryValueKey(
-                                AdapterKeyHandle,
-                                &ValueName,
-                                KeyValuePartialInformation,
-                                KeyInfo,
-                                KeyInfoSize,
-                                &ResultLength);
-                            
-                            if (NT_SUCCESS(RegStatus) && 
-                                KeyInfo->Type == REG_MULTI_SZ &&
-                                KeyInfo->DataLength > 0)
+                            RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                        &ValueName,
+                                                        KeyValuePartialInformation,
+                                                        KeyInfo,
+                                                        ResultLength,
+                                                        &ResultLength);
+
+                            if (NT_SUCCESS(RegStatus) && KeyInfo->DataLength >= sizeof(WCHAR))
                             {
-                                // Extract the first string from REG_MULTI_SZ
-                                PUCHAR DataBytes = (PUCHAR)KeyInfo->Data;
-                                PWSTR MultiSzData = (PWSTR)DataBytes;
-                                SIZE_T MaxChars = (ULONG)(KeyInfo->DataLength / sizeof(WCHAR));
-                                
-                                // Find the length of the first string
-                                SIZE_T NameLen = 0;
-                                for (SIZE_T i = 0; i < MaxChars; i++)
+                                PCWSTR Str = NULL;
+                                if (KeyInfo->Type == REG_MULTI_SZ)
                                 {
-                                    if (MultiSzData[i] == L'\0')
-                                    {
-                                        NameLen = i;
-                                        break;
-                                    }
+                                    Str = (PCWSTR)KeyInfo->Data;
                                 }
-                                
-                                // Build the DLL filename: "VBoxICD.dll" or "VBoxICD-x86.dll"
-                                if (NameLen > 0 && NameLen < MAX_PATH - 5) // -5 for ".dll" + null
+                                else if (KeyInfo->Type == REG_SZ || KeyInfo->Type == REG_EXPAND_SZ)
                                 {
-                                    // Copy the driver name
-                                    for (SIZE_T i = 0; i < NameLen && i < MAX_PATH - 5; i++)
-                                    {
-                                        OpenGlInfo->UmdOpenGlIcdFileName[i] = MultiSzData[i];
-                                    }
-                                    
-                                    // Append ".dll"
-                                    SIZE_T DllNameLen = NameLen;
-                                    OpenGlInfo->UmdOpenGlIcdFileName[DllNameLen++] = L'.';
-                                    OpenGlInfo->UmdOpenGlIcdFileName[DllNameLen++] = L'd';
-                                    OpenGlInfo->UmdOpenGlIcdFileName[DllNameLen++] = L'l';
-                                    OpenGlInfo->UmdOpenGlIcdFileName[DllNameLen++] = L'l';
-                                    OpenGlInfo->UmdOpenGlIcdFileName[DllNameLen] = L'\0';
-                                    
-                                    DPRINT1("RxgkWin32kQueryAdapterInfo: Found OpenGLDriverName='%ls', built filename='%ls'\n",
-                                            MultiSzData, OpenGlInfo->UmdOpenGlIcdFileName);
+                                    Str = (PCWSTR)KeyInfo->Data;
+                                }
+
+                                if (Str && *Str)
+                                {
+                                    /* Copy first string only, no extra normalization. */
+                                    RtlStringCchCopyNW(LocalInfo.UmdOpenGlIcdFileName,
+                                                       RTL_NUMBER_OF(LocalInfo.UmdOpenGlIcdFileName),
+                                                       Str,
+                                                       MAX_PATH - 1);
+                                    LocalInfo.UmdOpenGlIcdFileName[MAX_PATH - 1] = UNICODE_NULL;
+                                    DPRINT1("RxgkWin32kQueryAdapterInfo: OpenGLDriverName='%ls'\n",
+                                            LocalInfo.UmdOpenGlIcdFileName);
                                 }
                             }
-                            
+
                             ExFreePoolWithTag(KeyInfo, 'RXGK');
+                            KeyInfo = NULL;
                         }
                     }
-                    
-                    // Query OpenGLVersion
+
+                    /* Optional: OpenGLVersion */
                     ValueName = RTL_CONSTANT_STRING(L"OpenGLVersion");
-                    RegStatus = ZwQueryValueKey(
-                        AdapterKeyHandle,
-                        &ValueName,
-                        KeyValuePartialInformation,
-                        NULL,
-                        0,
-                        &ResultLength);
-                    
-                    if (RegStatus == STATUS_BUFFER_TOO_SMALL && ResultLength > 0)
+                    ResultLength = 0;
+                    RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                &ValueName,
+                                                KeyValuePartialInformation,
+                                                NULL,
+                                                0,
+                                                &ResultLength);
+                    if ((RegStatus == STATUS_BUFFER_TOO_SMALL || RegStatus == STATUS_BUFFER_OVERFLOW) && ResultLength)
                     {
-                        KeyInfoSize = ResultLength;
-                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(
-                            PagedPool, KeyInfoSize, 'RXGK');
-                        
+                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(PagedPool,
+                                                                                         ResultLength,
+                                                                                         'RXGK');
                         if (KeyInfo)
                         {
-                            RegStatus = ZwQueryValueKey(
-                                AdapterKeyHandle,
-                                &ValueName,
-                                KeyValuePartialInformation,
-                                KeyInfo,
-                                KeyInfoSize,
-                                &ResultLength);
-                            
+                            RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                        &ValueName,
+                                                        KeyValuePartialInformation,
+                                                        KeyInfo,
+                                                        ResultLength,
+                                                        &ResultLength);
                             if (NT_SUCCESS(RegStatus) && KeyInfo->Type == REG_DWORD && KeyInfo->DataLength >= sizeof(ULONG))
-                            {
-                                OpenGlInfo->Version = *(PULONG)KeyInfo->Data;
-                            }
-                            
+                                LocalInfo.Version = *(const ULONG*)KeyInfo->Data;
+
                             ExFreePoolWithTag(KeyInfo, 'RXGK');
+                            KeyInfo = NULL;
                         }
                     }
-                    
-                    // Query OpenGLFlags
+
+                    /* Optional: OpenGLFlags */
                     ValueName = RTL_CONSTANT_STRING(L"OpenGLFlags");
-                    RegStatus = ZwQueryValueKey(
-                        AdapterKeyHandle,
-                        &ValueName,
-                        KeyValuePartialInformation,
-                        NULL,
-                        0,
-                        &ResultLength);
-                    
-                    if (RegStatus == STATUS_BUFFER_TOO_SMALL && ResultLength > 0)
+                    ResultLength = 0;
+                    RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                &ValueName,
+                                                KeyValuePartialInformation,
+                                                NULL,
+                                                0,
+                                                &ResultLength);
+                    if ((RegStatus == STATUS_BUFFER_TOO_SMALL || RegStatus == STATUS_BUFFER_OVERFLOW) && ResultLength)
                     {
-                        KeyInfoSize = ResultLength;
-                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(
-                            PagedPool, KeyInfoSize, 'RXGK');
-                        
+                        KeyInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(PagedPool,
+                                                                                         ResultLength,
+                                                                                         'RXGK');
                         if (KeyInfo)
                         {
-                            RegStatus = ZwQueryValueKey(
-                                AdapterKeyHandle,
-                                &ValueName,
-                                KeyValuePartialInformation,
-                                KeyInfo,
-                                KeyInfoSize,
-                                &ResultLength);
-                            
+                            RegStatus = ZwQueryValueKey(AdapterKeyHandle,
+                                                        &ValueName,
+                                                        KeyValuePartialInformation,
+                                                        KeyInfo,
+                                                        ResultLength,
+                                                        &ResultLength);
                             if (NT_SUCCESS(RegStatus) && KeyInfo->Type == REG_DWORD && KeyInfo->DataLength >= sizeof(ULONG))
-                            {
-                                OpenGlInfo->Flags = *(PULONG)KeyInfo->Data;
-                            }
-                            
+                                LocalInfo.Flags = *(const ULONG*)KeyInfo->Data;
+
                             ExFreePoolWithTag(KeyInfo, 'RXGK');
+                            KeyInfo = NULL;
                         }
                     }
-                    
+
                     ZwClose(AdapterKeyHandle);
                 }
             }
-            
-            // Fallback: if no OpenGL ICD found, use default VirtualBox OpenGL ICD
-            if (OpenGlInfo->UmdOpenGlIcdFileName[0] == L'\0')
+
+            DPRINT1("RxgkWin32kQueryAdapterInfo: UMOPENGLINFO - ICD='%ls', Version=%lu, Flags=0x%lx\n",
+                    LocalInfo.UmdOpenGlIcdFileName, LocalInfo.Version, LocalInfo.Flags);
+
+            _SEH2_TRY
             {
-                // VirtualBox WDDM uses VBoxICD.dll as the OpenGL ICD
-                WCHAR* FallbackIcdName = L"VBoxICD.dll";
-                SIZE_T FallbackLen = wcslen(FallbackIcdName);
-                SIZE_T MaxLen = MAX_PATH - 1;
-                if (FallbackLen > MaxLen)
-                    FallbackLen = MaxLen;
-                
-                for (SIZE_T i = 0; i < FallbackLen; i++)
-                {
-                    OpenGlInfo->UmdOpenGlIcdFileName[i] = FallbackIcdName[i];
-                }
-                OpenGlInfo->UmdOpenGlIcdFileName[FallbackLen] = L'\0';
-                
-                // Set default version and flags if not already set
-                if (OpenGlInfo->Version == 0)
-                    OpenGlInfo->Version = 1;
-                if (OpenGlInfo->Flags == 0)
-                    OpenGlInfo->Flags = 1;
-                
-                DPRINT1("RxgkWin32kQueryAdapterInfo: UMOPENGLINFO - using fallback ICD='%ls'\n",
-                        OpenGlInfo->UmdOpenGlIcdFileName);
+                ProbeForWrite(Args->pPrivateDriverData, sizeof(D3DKMT_OPENGLINFO), sizeof(ULONG));
+                RtlCopyMemory(Args->pPrivateDriverData, &LocalInfo, sizeof(LocalInfo));
             }
-            else
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                DPRINT1("RxgkWin32kQueryAdapterInfo: UMOPENGLINFO - ICD='%ls', Version=%lu, Flags=0x%lx\n",
-                        OpenGlInfo->UmdOpenGlIcdFileName, OpenGlInfo->Version, OpenGlInfo->Flags);
+                return STATUS_ACCESS_VIOLATION;
             }
-            
+            _SEH2_END;
+
             return STATUS_SUCCESS;
         }
 
         case KMTQAITYPE_GETSEGMENTSIZE:
         {
-            DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_GETSEGMENTSIZE\n");
-            if (Args->PrivateDriverDataSize < sizeof(D3DKMT_SEGMENTSIZEINFO))
-            {
-                DPRINT1("RxgkWin32kQueryAdapterInfo: Buffer too small for GETSEGMENTSIZE\n");
-                return STATUS_BUFFER_TOO_SMALL;
-            }
-
-            // Initialize segment query input
-            RtlZeroMemory(&SegmentInfo, sizeof(SegmentInfo));
-            SegmentInfo.AgpApertureBase.QuadPart = 0;
-            SegmentInfo.AgpApertureSize.QuadPart = 0;
-            SegmentInfo.AgpFlags.Value = 0;
-
             /*
-             * WDDM miniports (including VBox) expect a two-step query:
-             *  1) pSegmentDescriptor == NULL -> returns NbSegment
-             *  2) allocate exactly NbSegment descriptors and call again
+             * Vista dxgkrnl: strict size (24 bytes) and returns three ULONGLONGs:
+             *   DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory
+             * via VIDMM_GLOBAL::GetTotalSegmentSize.
              *
-             * VBox rejects unexpected NbSegment values (it uses exactly 2).
+             * Bring-up: provide stable totals without requiring full VIDMM.
              */
-            RtlZeroMemory(&SegmentOut, sizeof(SegmentOut));
-            SegmentOut.NbSegment = 0;
-            SegmentOut.pSegmentDescriptor = NULL;
+            D3DKMT_SEGMENTSIZEINFO *SegSizes;
 
-            QueryAdapterInfo.Type = DXGKQAITYPE_QUERYSEGMENT;
-            QueryAdapterInfo.InputDataSize = sizeof(SegmentInfo);
-            QueryAdapterInfo.pInputData = &SegmentInfo;
-            QueryAdapterInfo.pOutputData = &SegmentOut;
-            QueryAdapterInfo.OutputDataSize = sizeof(DXGK_QUERYSEGMENTOUT);
-            Callback = TRUE;
-            
-            // Note: SegmentOut.pSegmentDescriptor will be allocated after the first callback.
-            break;
+            DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_GETSEGMENTSIZE\n");
+
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_SEGMENTSIZEINFO) || !Args->pPrivateDriverData)
+                return STATUS_INVALID_PARAMETER;
+
+            SegSizes = (D3DKMT_SEGMENTSIZEINFO *)Args->pPrivateDriverData;
+
+            _SEH2_TRY
+            {
+                ProbeForWrite(SegSizes, sizeof(*SegSizes), sizeof(ULONG));
+                RtlZeroMemory(SegSizes, sizeof(*SegSizes));
+
+                /* TODO: Once VIDMM is wired, return real totals. */
+                SegSizes->DedicatedVideoMemorySize = 0;
+                SegSizes->DedicatedSystemMemorySize = 0;
+                SegSizes->SharedSystemMemorySize = 256ULL * 1024ULL * 1024ULL;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            return STATUS_SUCCESS;
         }
 
         case KMTQAITYPE_ADAPTERREGISTRYINFO:
         {
             DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_ADAPTERREGISTRYINFO\n");
-            if (Args->PrivateDriverDataSize < sizeof(D3DKMT_ADAPTERREGISTRYINFO))
+            /* Vista: strict size match (2080 bytes). */
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_ADAPTERREGISTRYINFO) || !Args->pPrivateDriverData)
             {
-                DPRINT1("RxgkWin32kQueryAdapterInfo: Buffer too small for ADAPTERREGISTRYINFO\n");
-                return STATUS_BUFFER_TOO_SMALL;
+                DPRINT1("RxgkWin32kQueryAdapterInfo: Invalid buffer size for ADAPTERREGISTRYINFO (expected %u, got %u)\n",
+                        (UINT)sizeof(D3DKMT_ADAPTERREGISTRYINFO), (UINT)Args->PrivateDriverDataSize);
+                return STATUS_INVALID_PARAMETER;
             }
 
             RegistryInfo = (D3DKMT_ADAPTERREGISTRYINFO*)Args->pPrivateDriverData;
@@ -695,6 +641,135 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
             }
             _SEH2_END;
             
+            return STATUS_SUCCESS;
+        }
+
+        case KMTQAITYPE_ADAPTERADDRESS:
+        {
+            D3DKMT_ADAPTERADDRESS *Addr;
+
+            DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_ADAPTERADDRESS\n");
+
+            /* Vista: strict size 12 bytes. */
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_ADAPTERADDRESS) || !Args->pPrivateDriverData)
+                return STATUS_INVALID_PARAMETER;
+
+            _SEH2_TRY
+            {
+                ProbeForWrite(Args->pPrivateDriverData, sizeof(D3DKMT_ADAPTERADDRESS), sizeof(ULONG));
+                Addr = (D3DKMT_ADAPTERADDRESS *)Args->pPrivateDriverData;
+                RtlZeroMemory(Addr, sizeof(*Addr));
+
+                /* Best-effort mapping for bring-up. */
+                if (RxgkDriverExtension)
+                {
+                    Addr->BusNumber = RxgkDriverExtension->SystemIoBusNumber;
+                    Addr->DeviceNumber = RxgkDriverExtension->SystemIoSlotNumber & 0xFFFF;
+                    Addr->FunctionNumber = 0;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            return STATUS_SUCCESS;
+        }
+
+        case KMTQAITYPE_CURRENTDISPLAYMODE:
+        {
+            D3DKMT_CURRENTDISPLAYMODE *Cur;
+            D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+            D3DKMT_DISPLAYMODE Mode;
+
+            DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_CURRENTDISPLAYMODE\n");
+
+            /* Vista: strict size 48 bytes. */
+            if (Args->PrivateDriverDataSize != sizeof(D3DKMT_CURRENTDISPLAYMODE) || !Args->pPrivateDriverData)
+                return STATUS_INVALID_PARAMETER;
+
+            _SEH2_TRY
+            {
+                ProbeForWrite(Args->pPrivateDriverData, sizeof(D3DKMT_CURRENTDISPLAYMODE), sizeof(ULONG));
+                Cur = (D3DKMT_CURRENTDISPLAYMODE *)Args->pPrivateDriverData;
+
+                SourceId = Cur->VidPnSourceId; /* input */
+                RtlZeroMemory(&Mode, sizeof(Mode));
+
+                /* Prefer "desired mode" (set by CDD), else first enumerated mode, else fallback. */
+                if (RxgkDriverExtension && RxgkDriverExtension->DesiredModeValid && RxgkDriverExtension->pDesiredMode)
+                {
+                    Mode = *RxgkDriverExtension->pDesiredMode;
+                }
+                else if (RxgkDriverExtension && RxgkDriverExtension->EnumeratedModes && RxgkDriverExtension->EnumeratedModeCount > 0)
+                {
+                    Mode = RxgkDriverExtension->EnumeratedModes[0];
+                }
+                else
+                {
+                    Mode.Width = 800;
+                    Mode.Height = 600;
+                    Mode.Format = D3DDDIFMT_A8R8G8B8;
+                    Mode.RefreshRate.Numerator = 60;
+                    Mode.RefreshRate.Denominator = 1;
+                    Mode.IntegerRefreshRate = 60;
+                    /* d3dukmdt.h uses D3DDDI_VSSLO_* names. */
+                    Mode.ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
+                    Mode.DisplayOrientation = D3DDDI_ROTATION_IDENTITY;
+                    Mode.DisplayFixedOutput = 0;
+                }
+
+                Cur->VidPnSourceId = SourceId;
+                Cur->DisplayMode = Mode;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
+            return STATUS_SUCCESS;
+        }
+
+        case KMTQAITYPE_MODELIST:
+        {
+            D3DKMT_DISPLAYMODELIST *List;
+            UINT Capacity;
+            UINT CopyCount;
+
+            DPRINT1("RxgkWin32kQueryAdapterInfo: KMTQAITYPE_MODELIST\n");
+
+            if (!Args->pPrivateDriverData || Args->PrivateDriverDataSize < sizeof(D3DKMT_DISPLAYMODELIST))
+                return STATUS_INVALID_PARAMETER;
+
+            _SEH2_TRY
+            {
+                ProbeForWrite(Args->pPrivateDriverData, Args->PrivateDriverDataSize, sizeof(ULONG));
+                List = (D3DKMT_DISPLAYMODELIST *)Args->pPrivateDriverData;
+
+                /* Compute how many modes fit in the caller buffer. */
+                Capacity = (Args->PrivateDriverDataSize - sizeof(D3DKMT_DISPLAYMODELIST)) / sizeof(D3DKMT_DISPLAYMODE);
+                CopyCount = 0;
+
+                if (RxgkDriverExtension && RxgkDriverExtension->EnumeratedModes && RxgkDriverExtension->EnumeratedModeCount)
+                {
+                    CopyCount = (RxgkDriverExtension->EnumeratedModeCount < Capacity) ?
+                                RxgkDriverExtension->EnumeratedModeCount : Capacity;
+
+                    if (CopyCount)
+                        RtlCopyMemory(List->pModeList, RxgkDriverExtension->EnumeratedModes, CopyCount * sizeof(D3DKMT_DISPLAYMODE));
+                }
+
+                List->ModeCount = CopyCount;
+                /* VidPnSourceId is treated as input by callers; preserve it. */
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            _SEH2_END;
+
             return STATUS_SUCCESS;
         }
 
@@ -824,15 +899,25 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
             _SEH2_END;
 
             /*
-             * Best-effort debug: VBox fills VBOXWDDM_QAI starting with:
-             *   u32Version, enmHwType, u32AdapterCaps, ...
+             * Best-effort debug: VBox uses VBOXWDDM_QAI (see VBoxGraphics/Video/common/wddm/VBoxMPIf.h):
+             *   u32Version, u32Reserved, enmHwType, u32AdapterCaps, ...
              * Print these to confirm whether 3D is enabled (CAP_3D).
              */
-            if (UmDriverPrivateSize >= sizeof(ULONG) * 3)
+            if (UmDriverPrivateSize >= sizeof(ULONG) * 4)
             {
                 const ULONG *dw = (const ULONG *)KmDriverPrivate;
-                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE hdr: u32Version=%lu enmHwType=%lu u32AdapterCaps=0x%08lX\n",
-                        dw[0], dw[1], dw[2]);
+                DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE hdr: u32Version=%lu u32Reserved=%lu enmHwType=%lu u32AdapterCaps=0x%08lX\n",
+                        dw[0], dw[1], dw[2], dw[3]);
+
+                /* Irrefutable sanity checks for VBoxDispD3D OpenAdapter prerequisites. */
+                if (dw[0] != 22 /* VBOXVIDEOIF_VERSION */ || dw[1] != 0)
+                {
+                    DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE INVALID: expected u32Version=22 u32Reserved=0\n");
+                }
+                if (UmDriverPrivateSize >= sizeof(ULONG) * 5)
+                {
+                    DPRINT1("RxgkWin32kQueryAdapterInfo: UMDRIVERPRIVATE cInfos=%lu\n", dw[4]);
+                }
             }
 
             ExFreePoolWithTag(KmDriverPrivate, 'pDxR');

@@ -184,6 +184,52 @@ W32Prof_Test_D3D9Cube(const ProfilerConfig* cfg)
         return;
     }
 
+    /* Preflight: dump basic adapter/caps probes to pinpoint why CreateDevice returns NOTAVAILABLE. */
+    {
+        TCHAR sysdir[MAX_PATH];
+        TCHAR umdPath[MAX_PATH];
+        HMODULE umd;
+        D3DCAPS9 caps;
+        D3DADAPTER_IDENTIFIER9 ident;
+        D3DDISPLAYMODE mode;
+
+        sysdir[0] = TEXT('\0');
+        if (GetSystemDirectory(sysdir, MAX_PATH))
+        {
+            wsprintf(umdPath, TEXT("%s\\VBoxDispD3D.dll"), sysdir);
+            umd = LoadLibrary(umdPath);
+            ResultsPrint(TEXT("D3D9: preload UMD '%s' -> %s (err=%lu)"),
+                         umdPath, umd ? TEXT("OK") : TEXT("FAIL"), GetLastError());
+        }
+
+        umd = LoadLibrary(TEXT("VBoxDispD3D.dll"));
+        ResultsPrint(TEXT("D3D9: preload UMD 'VBoxDispD3D.dll' -> %s (err=%lu)"),
+                     umd ? TEXT("OK") : TEXT("FAIL"), GetLastError());
+
+        ZeroMemory(&ident, sizeof(ident));
+        hr = IDirect3D9_GetAdapterIdentifier(d3d, D3DADAPTER_DEFAULT, 0, &ident);
+        ResultsPrint(TEXT("D3D9: GetAdapterIdentifier -> 0x%08lx (Desc='%hs')"),
+                     (ULONG)hr, SUCCEEDED(hr) ? ident.Description : "");
+
+        ZeroMemory(&mode, sizeof(mode));
+        hr = IDirect3D9_GetAdapterDisplayMode(d3d, D3DADAPTER_DEFAULT, &mode);
+        ResultsPrint(TEXT("D3D9: GetAdapterDisplayMode -> 0x%08lx (Fmt=%u %lux%lu@%lu)"),
+                     (ULONG)hr, (UINT)mode.Format, (ULONG)mode.Width, (ULONG)mode.Height, (ULONG)mode.RefreshRate);
+
+        ZeroMemory(&caps, sizeof(caps));
+        hr = IDirect3D9_GetDeviceCaps(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, &caps);
+        ResultsPrint(TEXT("D3D9: GetDeviceCaps(HAL) -> 0x%08lx (DevCaps=0x%08lx Caps2=0x%08lx)"),
+                     (ULONG)hr, (ULONG)caps.DevCaps, (ULONG)caps.Caps2);
+
+        hr = IDirect3D9_CheckDeviceType(d3d,
+                                        D3DADAPTER_DEFAULT,
+                                        D3DDEVTYPE_HAL,
+                                        mode.Format,
+                                        mode.Format,
+                                        TRUE);
+        ResultsPrint(TEXT("D3D9: CheckDeviceType(HAL, windowed) -> 0x%08lx"), (ULONG)hr);
+    }
+
     ZeroMemory(&pp, sizeof(pp));
     pp.Windowed = TRUE;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;

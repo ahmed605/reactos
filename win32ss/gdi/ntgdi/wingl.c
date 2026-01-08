@@ -26,11 +26,16 @@ IntGetipfdDevMax(PDC pdc)
 
     if (ppdev->DriverFunctions.DescribePixelFormat)
     {
+        DPRINT1("WinGL: DescribePixelFormat hook present (dhpdev=%p)\n", ppdev->dhpdev);
         Ret = ppdev->DriverFunctions.DescribePixelFormat(
                                                 ppdev->dhpdev,
                                                 1,
                                                 0,
                                                 NULL);
+    }
+    else
+    {
+        DPRINT1("WinGL: DescribePixelFormat hook MISSING for dhpdev=%p\n", ppdev->dhpdev);
     }
 
     if (Ret) pdc->ipfdDevMax = Ret;
@@ -99,6 +104,10 @@ NtGdiDescribePixelFormat(
                                                     sizeof(pfdSafe),
                                                     &pfdSafe);
     }
+    else
+    {
+        DPRINT1("WinGL: NtGdiDescribePixelFormat: no DescribePixelFormat hook for dhpdev=%p\n", ppdev->dhpdev);
+    }
 
     if (Ret && cjpfd)
     {
@@ -117,6 +126,15 @@ NtGdiDescribePixelFormat(
 
 Exit:
     DC_UnlockDc(pdc);
+    if (Ret && ppfd)
+    {
+        DPRINT1("WinGL: DescribePixelFormat ipfd=%d -> flags=0x%08lx generic=%d accel=%d db=%d\n",
+                ipfd,
+                pfdSafe.dwFlags,
+                (pfdSafe.dwFlags & PFD_GENERIC_FORMAT) ? 1 : 0,
+                (pfdSafe.dwFlags & PFD_GENERIC_ACCELERATED) ? 1 : 0,
+                (pfdSafe.dwFlags & PFD_DOUBLEBUFFER) ? 1 : 0);
+    }
     return Ret;
 }
 
@@ -184,10 +202,15 @@ NtGdiSetPixelFormat(
 
     if (ppdev->DriverFunctions.SetPixelFormat)
     {
+        DPRINT1("WinGL: SetPixelFormat hook present (ipfd=%d)\n", ipfd);
         Ret = ppdev->DriverFunctions.SetPixelFormat(
                                                 pso,
                                                 ipfd,
                                                 hWnd);
+    }
+    else
+    {
+        DPRINT1("WinGL: SetPixelFormat hook MISSING (ipfd=%d)\n", ipfd);
     }
 
 Exit:
@@ -245,7 +268,12 @@ NtGdiSwapBuffers(
 
     if (ppdev->DriverFunctions.SwapBuffers)
     {
+        DPRINT1("WinGL: SwapBuffers hook present\n");
         Ret = ppdev->DriverFunctions.SwapBuffers(pso, pWndObj);
+    }
+    else
+    {
+        DPRINT1("WinGL: SwapBuffers hook MISSING\n");
     }
 
 Exit:

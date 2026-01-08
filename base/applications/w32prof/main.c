@@ -31,6 +31,122 @@ static HANDLE g_hStopEvent;
 
 static int W32ProfMain(HINSTANCE hInstance);
 
+static BOOL
+CommandLineHasToken(_In_z_ const TCHAR* Token)
+{
+    const TCHAR* cmd = GetCommandLine();
+    if (!cmd || !Token)
+        return FALSE;
+    return (_tcsstr(cmd, Token) != NULL);
+}
+
+typedef BOOL (APIENTRY *PFN_DrvValidateVersion)(DWORD);
+
+static void
+DbgPrintLine(_In_z_ const TCHAR* Line)
+{
+    OutputDebugString(Line);
+    OutputDebugString(TEXT("\r\n"));
+}
+
+static void
+IcdCheckOne(_In_z_ const TCHAR* DllPath)
+{
+    HMODULE hMod;
+    DWORD err;
+    FARPROC p;
+    TCHAR buf[512];
+    TCHAR loadedPath[MAX_PATH];
+
+    wsprintf(buf, TEXT("[w32prof] ICDCHECK: LoadLibraryW('%s')"), DllPath);
+    DbgPrintLine(buf);
+
+    SetLastError(0);
+    hMod = LoadLibrary(DllPath);
+    if (!hMod)
+    {
+        err = GetLastError();
+        wsprintf(buf, TEXT("[w32prof] ICDCHECK: LoadLibrary FAILED, GetLastError=%lu"), err);
+        DbgPrintLine(buf);
+        return;
+    }
+
+    loadedPath[0] = TEXT('\0');
+    if (GetModuleFileName(hMod, loadedPath, MAX_PATH) > 0)
+    {
+        wsprintf(buf, TEXT("[w32prof] ICDCHECK: Loaded module path='%s'"), loadedPath);
+        DbgPrintLine(buf);
+    }
+
+    /* Required exports that Vista opengl32 checks when loading an ICD */
+    {
+        static const char* const kExports[] =
+        {
+            "DrvValidateVersion",
+            "DrvSetCallbackProcs",
+            "DrvCreateContext",
+            "DrvDeleteContext",
+            "DrvSetContext",
+            "DrvReleaseContext",
+            "DrvCopyContext",
+            "DrvShareLists",
+            "DrvDescribePixelFormat",
+            "DrvSetPixelFormat",
+            "DrvSwapBuffers",
+            "DrvPresentBuffers",
+            "DrvGetProcAddress",
+        };
+        UINT i;
+        for (i = 0; i < (UINT)(sizeof(kExports) / sizeof(kExports[0])); i++)
+        {
+            p = GetProcAddress(hMod, kExports[i]);
+            wsprintf(buf, TEXT("[w32prof] ICDCHECK:  export %-22S %s"), kExports[i], p ? TEXT("OK") : TEXT("MISSING"));
+            DbgPrintLine(buf);
+        }
+    }
+
+    /* ValidateVersion(1) */
+    p = GetProcAddress(hMod, "DrvValidateVersion");
+    if (p)
+    {
+        PFN_DrvValidateVersion fn = (PFN_DrvValidateVersion)p;
+        BOOL ok = fn(1);
+        wsprintf(buf, TEXT("[w32prof] ICDCHECK: DrvValidateVersion(1) -> %u"), ok ? 1 : 0);
+        DbgPrintLine(buf);
+    }
+
+    FreeLibrary(hMod);
+}
+
+static void
+RunIcdCheck(void)
+{
+    TCHAR sysdir[MAX_PATH];
+    TCHAR path[MAX_PATH];
+
+    DbgPrintLine(TEXT("[w32prof] ICDCHECK: starting"));
+
+    if (!GetSystemDirectory(sysdir, MAX_PATH))
+    {
+        DbgPrintLine(TEXT("[w32prof] ICDCHECK: GetSystemDirectory failed"));
+        return;
+    }
+
+    wsprintf(path, TEXT("%s\\VBoxGL.dll"), sysdir);
+    IcdCheckOne(path);
+
+    wsprintf(path, TEXT("%s\\VBoxICD.dll"), sysdir);
+    IcdCheckOne(path);
+
+    /* Also test the bare-name case, since Vista opengl32 may call LoadLibraryW on the raw registry string. */
+    IcdCheckOne(TEXT("VBoxGL.dll"));
+    IcdCheckOne(TEXT("VBoxGL"));
+    IcdCheckOne(TEXT("VBoxICD.dll"));
+    IcdCheckOne(TEXT("VBoxICD"));
+
+    DbgPrintLine(TEXT("[w32prof] ICDCHECK: done"));
+}
+
 static void
 BuildDefaultConfig(ProfilerConfig* cfg, BOOL headless)
 {
@@ -64,11 +180,7 @@ BuildDefaultConfig(ProfilerConfig* cfg, BOOL headless)
 static BOOL
 CommandLineHasHeadless(void)
 {
-    const TCHAR* cmd = GetCommandLine();
-    if (!cmd)
-        return FALSE;
-
-    return (_tcsstr(cmd, TEXT("-headless")) != NULL);
+    return CommandLineHasToken(TEXT("-headless"));
 }
 
 static void
@@ -627,6 +739,11 @@ _tWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPTSTR lpCmdLine, int nS
     (void)hPrevInstance;
     (void)lpCmdLine;
     (void)nShowCmd;
+    if (CommandLineHasToken(TEXT("-icdcheck")))
+    {
+        RunIcdCheck();
+        return 0;
+    }
     return W32ProfMain(hInstance);
 }
 
@@ -636,6 +753,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShow
     (void)hPrevInstance;
     (void)lpCmdLine;
     (void)nShowCmd;
+    if (CommandLineHasToken(TEXT("-icdcheck")))
+    {
+        RunIcdCheck();
+        return 0;
+    }
     return W32ProfMain(hInstance);
 }
 
