@@ -245,6 +245,7 @@ typedef struct _RXGKCDD_ENABLE
     D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;  /* in */
 
     D3DKMT_HANDLE                   hPrimaryAllocation; /* out */
+    D3DKMT_HANDLE                   hShadowAllocation;  /* out: Shadow/staging surface for GDI drawing */
     UINT                            Width;              /* out */
     UINT                            Height;             /* out */
     UINT                            Pitch;              /* out (bytes per scanline) */

@@ -80,6 +80,7 @@ typedef struct _CDDPDEV
 
    /* RDDM / Dxgkrnl interop (bring-up) */
    D3DKMT_HANDLE hPrimaryAllocation;
+   D3DKMT_HANDLE hShadowAllocation;  /* Shadow/staging surface for GDI drawing */
    D3DKMT_HANDLE hDxgDevice;
    D3DKMT_HANDLE hDxgContext;
    

@@ -20,7 +20,7 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
     if (!Args)
         return STATUS_INVALID_PARAMETER;
 
-    DPRINT1("RxgkWin32kGetDisplayModeList: hAdapter=%p SourceId=%lu ModeCount(in)=%lu pModeList=%p\n",
+    DPRINT("RxgkWin32kGetDisplayModeList: hAdapter=%p SourceId=%lu ModeCount(in)=%lu pModeList=%p\n",
             (PVOID)(ULONG_PTR)Args->hAdapter,
             (ULONG)Args->VidPnSourceId,
             (ULONG)Args->ModeCount,
@@ -62,14 +62,14 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
                 _SEH2_TRY
                 {
                     ProbeForWrite(Args->pModeList, ModeCount * sizeof(D3DKMT_DISPLAYMODE), 1);
-                    RtlCopyMemory(Args->pModeList, 
-                                 RxgkDriverExtension->EnumeratedModes,
-                                 ModeCount * sizeof(D3DKMT_DISPLAYMODE));
+                     RtlCopyMemory(Args->pModeList, 
+                         RxgkDriverExtension->EnumeratedModes,
+                         ModeCount * sizeof(D3DKMT_DISPLAYMODE));
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
                     KeReleaseSpinLock(&RxgkDriverExtension->EnumeratedModesLock, OldIrql);
-                    DPRINT1("RxgkWin32kGetDisplayModeList: Exception while copying modes to user buffer\n");
+                    DPRINT("RxgkWin32kGetDisplayModeList: Exception while copying modes to user buffer\n");
                     _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
                 }
                 _SEH2_END;
@@ -139,11 +139,11 @@ RxgkWin32kGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* Args)
         _SEH2_TRY
         {
             ProbeForWrite(Args->pModeList, sizeof(D3DKMT_DISPLAYMODE), 1);
-            Args->pModeList[0] = Mode;
+    Args->pModeList[0] = Mode;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            DPRINT1("RxgkWin32kGetDisplayModeList: Exception while writing mode to user buffer\n");
+            DPRINT("RxgkWin32kGetDisplayModeList: Exception while writing mode to user buffer\n");
             _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
         }
         _SEH2_END;
@@ -167,7 +167,7 @@ RxgkWin32kGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* Args
     if (!Args)
         return STATUS_INVALID_PARAMETER;
 
-    DPRINT1("RxgkWin32kGetMultisampleMethodList: hAdapter=%p SourceId=%lu %ux%u fmt=%u MethodCount(in)=%u pMethodList=%p\n",
+    DPRINT("RxgkWin32kGetMultisampleMethodList: hAdapter=%p SourceId=%lu %ux%u fmt=%u MethodCount(in)=%u pMethodList=%p\n",
             (PVOID)(ULONG_PTR)Args->hAdapter,
             (ULONG)Args->VidPnSourceId,
             (UINT)Args->Width,
@@ -248,6 +248,7 @@ RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE Args)
     DXGK_DISPLAY_INFORMATION DispInfo;
     D3DKMT_HANDLE Shared = 0;
     D3DKMT_HANDLE Alloc = 0;
+    NTSTATUS Status;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -259,7 +260,7 @@ RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE Args)
     if (DispInfo.Width == 0 || DispInfo.Height == 0 || DispInfo.Pitch == 0)
         return STATUS_NOT_SUPPORTED;
 
-    DPRINT1("RxgkWin32kCddEnable: WxH=%ux%u Pitch=%u ColorFormat=%u Phys=%I64x\n",
+    DPRINT("RxgkWin32kCddEnable: WxH=%ux%u Pitch=%u ColorFormat=%u Phys=%I64x\n",
             DispInfo.Width, DispInfo.Height, DispInfo.Pitch,
             DispInfo.ColorFormat, DispInfo.PhysicAddress.QuadPart);
 
@@ -301,12 +302,33 @@ RxgkWin32kCddEnable(_Inout_ PRXGKCDD_ENABLE Args)
     else
     {
         /* Fallback: keep the legacy post-display allocation handle. */
-        Args->hPrimaryAllocation = 1;
+    Args->hPrimaryAllocation = 1;
     }
     Args->Width = (UINT)DispInfo.Width;
     Args->Height = (UINT)DispInfo.Height;
     Args->Pitch = (UINT)DispInfo.Pitch;
     Args->Format = DispInfo.ColorFormat;
+    
+    /* Create shadow/staging surface for GDI drawing */
+    Args->hShadowAllocation = 0;
+    Status = RxgkShadowSurfaceCreate(
+        Args->Width,
+        Args->Height,
+        Args->Format,
+        Args->Pitch,
+        &Args->hShadowAllocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkWin32kCddEnable: Failed to create shadow surface: 0x%08X\n", Status);
+        /* Continue without shadow - CDD will fall back to drawing directly to primary */
+        Args->hShadowAllocation = 0;
+    }
+    else
+    {
+        DPRINT1("RxgkWin32kCddEnable: Created shadow surface hShadow=%p\n",
+                (PVOID)(ULONG_PTR)Args->hShadowAllocation);
+    }
+    
     return STATUS_SUCCESS;
 }
 
@@ -345,7 +367,7 @@ RxgkWin32kLock(_In_ D3DKMT_LOCK* Args)
     {
         /* Proper shared primary: validate against the shared primary allocation handle. */
         if (!RxgkSharedPrimaryQuery(NULL, NULL, &AllocHandle, &MiniAlloc, &Phys, &SharedSize))
-            return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_HANDLE;
 
         if (Args->hAllocation != AllocHandle)
             return STATUS_INVALID_HANDLE;
@@ -413,7 +435,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
     if (!Args)
         return STATUS_INVALID_PARAMETER;
 
-    DPRINT1("RxgkWin32kSetDisplayMode: hDevice=%p hPrimaryAlloc=%p ScanLine=%u Rotation=%u PreserveVidPn=%u\n",
+    DPRINT("RxgkWin32kSetDisplayMode: hDevice=%p hPrimaryAlloc=%p ScanLine=%u Rotation=%u PreserveVidPn=%u\n",
             (PVOID)(ULONG_PTR)Args->hDevice,
             (PVOID)(ULONG_PTR)Args->hPrimaryAllocation,
             (UINT)Args->ScanLineOrdering,
@@ -497,7 +519,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
             RequestedMode.DisplayOrientation = Args->DisplayOrientation;
     }
 
-    DPRINT1("RxgkWin32kSetDisplayMode: Setting mode %ux%u format=%u refresh=%u/%u\n",
+    DPRINT("RxgkWin32kSetDisplayMode: Setting mode %ux%u format=%u refresh=%u/%u\n",
             RequestedMode.Width, RequestedMode.Height, RequestedMode.Format,
             RequestedMode.RefreshRate.Numerator, RequestedMode.RefreshRate.Denominator);
 
@@ -506,7 +528,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
     Status = RxgkBuildConstrainingVidPnWithMode(&hConstrainingVidPn, 0, 0, &RequestedMode);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("RxgkWin32kSetDisplayMode: RxgkBuildConstrainingVidPnWithMode failed 0x%08X\n", Status);
+        DPRINT("RxgkWin32kSetDisplayMode: RxgkBuildConstrainingVidPnWithMode failed 0x%08X\n", Status);
         return Status;
     }
 
@@ -528,7 +550,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
         
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("RxgkWin32kSetDisplayMode: First EnumVidPnCofuncModality failed 0x%08X\n", Status);
+            DPRINT("RxgkWin32kSetDisplayMode: First EnumVidPnCofuncModality failed 0x%08X\n", Status);
             RxgkDestroyVidPn(hConstrainingVidPn);
             return Status;
         }
@@ -541,7 +563,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
         
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("RxgkWin32kSetDisplayMode: Second EnumVidPnCofuncModality failed 0x%08X\n", Status);
+            DPRINT("RxgkWin32kSetDisplayMode: Second EnumVidPnCofuncModality failed 0x%08X\n", Status);
             RxgkDestroyVidPn(hConstrainingVidPn);
             return Status;
         }
@@ -554,7 +576,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
     // Validate MiniportContext before committing
     if (!RxgkDriverExtension->MiniportContext)
     {
-        DPRINT1("RxgkWin32kSetDisplayMode: MiniportContext is NULL, cannot commit VidPN\n");
+        DPRINT("RxgkWin32kSetDisplayMode: MiniportContext is NULL, cannot commit VidPN\n");
         RxgkDestroyVidPn(hFunctionalVidPn);
         return STATUS_INVALID_DEVICE_STATE;
     }
@@ -563,7 +585,7 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
     // Instead, we should use SetVidPnSourceAddress to update the existing VidPN
     if (Args->Flags.PreserveVidPn)
     {
-        DPRINT1("RxgkWin32kSetDisplayMode: PreserveVidPn is set, skipping CommitVidPn\n");
+        DPRINT("RxgkWin32kSetDisplayMode: PreserveVidPn is set, skipping CommitVidPn\n");
         RxgkDestroyVidPn(hFunctionalVidPn);
         return STATUS_SUCCESS;
     }
@@ -590,17 +612,17 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
         CommitArgs.Flags.PathPowerTransition = 0;
         CommitArgs.Flags.PathPoweredOff = 0;
 
-        DPRINT1("RxgkWin32kSetDisplayMode: Committing VidPN with hPrimaryAlloc=%p MiniportContext=%p\n",
+        DPRINT("RxgkWin32kSetDisplayMode: Committing VidPN with hPrimaryAlloc=%p MiniportContext=%p\n",
                 CommitArgs.hPrimaryAllocation,
                 RxgkDriverExtension->MiniportContext);
         
         //HACK: Something is wron gwith commiiting vidpns
                 Status = STATUS_SUCCESS;//RxgkDriverExtension->DxgkDdiCommitVidPn(RxgkDriverExtension->MiniportContext, &CommitArgs);
-        DPRINT1("RxgkWin32kSetDisplayMode: CommitVidPn -> 0x%08X\n", Status);
+        DPRINT("RxgkWin32kSetDisplayMode: CommitVidPn -> 0x%08X\n", Status);
         
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("RxgkWin32kSetDisplayMode: CommitVidPn failed 0x%08X\n", Status);
+            DPRINT("RxgkWin32kSetDisplayMode: CommitVidPn failed 0x%08X\n", Status);
             // Don't fail completely - the mode might have been set already
         }
     }
@@ -612,6 +634,152 @@ RxgkWin32kSetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* Args)
     return Status;
 }
 
+
+/*
+ * Helper function to open an allocation for a device.
+ * Returns the device-specific allocation handle needed for Present.
+ */
+/* Minimal VBox structs for debugging (do not include VBox headers in ReactOS build). */
+typedef struct _RXGK_VBOXWDDM_OPENALLOCATION_MIN
+{
+    LIST_ENTRY Link;      /* first field in VBoxMPTypes.h VBOXWDDM_OPENALLOCATION */
+    D3DKMT_HANDLE hAlloc; /* second */
+    PVOID pAllocation;    /* third */
+    PVOID pDevice;        /* fourth */
+} RXGK_VBOXWDDM_OPENALLOCATION_MIN, *PRXGK_VBOXWDDM_OPENALLOCATION_MIN;
+
+static
+NTSTATUS
+RxgkPresentOpenAllocationForDevice(
+    _In_ HANDLE MiniportDevice,
+    _In_ D3DKMT_HANDLE KmtAllocation,
+    _Out_ HANDLE* phDeviceSpecificAllocation)
+{
+    NTSTATUS Status;
+    DXGK_OPENALLOCATIONINFO OpenInfo;
+    DXGKARG_OPENALLOCATION OpenArgs;
+    PVOID AllocPrivData = NULL;
+    UINT AllocPrivSize = 0;
+    D3DKMT_HANDLE SharedPrimary = 0;
+    D3DKMT_HANDLE SharedKmtAlloc = 0;
+
+    if (!phDeviceSpecificAllocation || !MiniportDevice)
+        return STATUS_INVALID_PARAMETER;
+
+    *phDeviceSpecificAllocation = NULL;
+
+    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiOpenAllocation)
+        return STATUS_NOT_SUPPORTED;
+
+    /* If allocation is 0, use shared primary. */
+    if (KmtAllocation == 0)
+    {
+        if (!RxgkSharedPrimaryQuery(&SharedPrimary, NULL, &SharedKmtAlloc, NULL, NULL, NULL) ||
+            SharedKmtAlloc == 0)
+        {
+            return STATUS_INVALID_HANDLE;
+        }
+        KmtAllocation = SharedKmtAlloc;
+    }
+
+    /* 
+     * Get private driver data for the allocation.
+     * VBox requires PrivateDriverDataSize == sizeof(VBOXWDDM_ALLOCINFO) and valid pPrivateDriverData.
+     * First try shared primary, then check our metadata storage.
+     */
+    if (RxgkSharedPrimaryQuery(&SharedPrimary, NULL, &SharedKmtAlloc, NULL, NULL, NULL) &&
+        SharedKmtAlloc == KmtAllocation)
+    {
+        /* This is the shared primary - get its private driver data. */
+        if (!RxgkSharedPrimaryGetAllocationPrivateData(&AllocPrivData, &AllocPrivSize) ||
+            !AllocPrivData || AllocPrivSize == 0)
+        {
+            DPRINT("RxgkPresentOpenAllocationForDevice: Shared primary has no private data - this will fail\n");
+            /* Continue anyway - let VBox reject it with a clear error */
+        }
+    }
+    else
+    {
+        /* Not shared primary - get private data from our metadata storage. */
+        NTSTATUS MetadataStatus = RxgkKmtAllocationMetadataQuery(
+            KmtAllocation, &AllocPrivData, &AllocPrivSize);
+        if (!NT_SUCCESS(MetadataStatus) || !AllocPrivData || AllocPrivSize == 0)
+        {
+            DPRINT("RxgkPresentOpenAllocationForDevice: No metadata found for allocation %p (Status=0x%08X) - VBox will reject this\n",
+                    (PVOID)(ULONG_PTR)KmtAllocation, MetadataStatus);
+            /* Continue anyway - let VBox reject it with a clear error */
+        }
+    }
+
+    RtlZeroMemory(&OpenInfo, sizeof(OpenInfo));
+    OpenInfo.hAllocation = KmtAllocation;
+    OpenInfo.pPrivateDriverData = AllocPrivData;
+    OpenInfo.PrivateDriverDataSize = AllocPrivSize;
+    OpenInfo.hDeviceSpecificAllocation = NULL; /* out */
+
+    RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
+    OpenArgs.NumAllocations = 1;
+    OpenArgs.pOpenAllocation = &OpenInfo;
+    OpenArgs.pPrivateDriverData = NULL;
+    OpenArgs.PrivateDriverSize = 0;
+    OpenArgs.Flags.Value = 0;
+    OpenArgs.SubresourceIndex = 0;
+    OpenArgs.SubresourceOffset = 0;
+    OpenArgs.Pitch = 0;
+
+    DPRINT("RxgkPresentOpenAllocationForDevice: Calling DxgkDdiOpenAllocation hAlloc=%p PrivData=%p PrivSize=%u\n",
+            (PVOID)(ULONG_PTR)OpenInfo.hAllocation, AllocPrivData, (UINT)OpenInfo.PrivateDriverDataSize);
+    DPRINT("RxgkPresentOpenAllocationForDevice: MiniportDevice=%p OpenArgs.NumAllocations=%u\n",
+            (PVOID)(ULONG_PTR)MiniportDevice, (UINT)OpenArgs.NumAllocations);
+
+    Status = RxgkDriverExtension->DxgkDdiOpenAllocation(MiniportDevice, &OpenArgs);
+    DPRINT("RxgkPresentOpenAllocationForDevice: DxgkDdiOpenAllocation returned Status=0x%08X hDevSpec=%p\n",
+            Status, OpenInfo.hDeviceSpecificAllocation);
+    
+    if (!NT_SUCCESS(Status) || OpenInfo.hDeviceSpecificAllocation == NULL)
+    {
+        DPRINT("RxgkPresentOpenAllocationForDevice: DxgkDdiOpenAllocation failed 0x%08X hDevSpec=%p hAlloc=%p PrivData=%p PrivSize=%u\n",
+                Status, OpenInfo.hDeviceSpecificAllocation, (PVOID)(ULONG_PTR)OpenInfo.hAllocation,
+                AllocPrivData, (UINT)OpenInfo.PrivateDriverDataSize);
+        /* If hDeviceSpecificAllocation is NULL, try to get allocation via DxgkCbGetHandleData to verify handle is valid */
+        if (OpenInfo.hDeviceSpecificAllocation == NULL && OpenInfo.hAllocation != 0)
+        {
+            DXGKARGCB_GETHANDLEDATA GhData;
+            GhData.hObject = OpenInfo.hAllocation;
+            GhData.Type = DXGK_HANDLE_ALLOCATION;
+            GhData.Flags.Value = 0;
+            /* Use RxgkKmtAllocationLookup directly instead of DxgkCbGetHandleData callback */
+            PVOID pAlloc = (PVOID)RxgkKmtAllocationLookup(OpenInfo.hAllocation);
+            DPRINT("RxgkPresentOpenAllocationForDevice: RxgkKmtAllocationLookup returned %p for handle %p\n",
+                    pAlloc, (PVOID)(ULONG_PTR)OpenInfo.hAllocation);
+        }
+        return Status ? Status : STATUS_INVALID_PARAMETER;
+    }
+    
+    /* Validate the returned hDeviceSpecificAllocation structure */
+    _SEH2_TRY
+    {
+        PRXGK_VBOXWDDM_OPENALLOCATION_MIN pOa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)OpenInfo.hDeviceSpecificAllocation;
+        if (pOa->pDevice == NULL || pOa->pAllocation == NULL)
+        {
+            DPRINT("RxgkPresentOpenAllocationForDevice: Invalid hDeviceSpecificAllocation structure: pDevice=%p pAllocation=%p\n",
+                    (PVOID)(ULONG_PTR)pOa->pDevice, (PVOID)(ULONG_PTR)pOa->pAllocation);
+            return STATUS_INVALID_PARAMETER;
+        }
+        DPRINT("RxgkPresentOpenAllocationForDevice: Valid hDeviceSpecificAllocation: pDevice=%p pAllocation=%p\n",
+                (PVOID)(ULONG_PTR)pOa->pDevice, (PVOID)(ULONG_PTR)pOa->pAllocation);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT("RxgkPresentOpenAllocationForDevice: Exception validating hDeviceSpecificAllocation: Code=0x%08X\n",
+                _SEH2_GetExceptionCode());
+        return STATUS_INVALID_PARAMETER;
+    }
+    _SEH2_END;
+
+    *phDeviceSpecificAllocation = OpenInfo.hDeviceSpecificAllocation;
+    return STATUS_SUCCESS;
+}
 
 NTSTATUS
 NTAPI
@@ -627,11 +795,8 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     RECT* DstSubs = NULL;
     UINT SubCnt = 0;
     LONG dx, dy;
-    D3DKMT_HANDLE SharedPrimary = 0;
-    HANDLE SharedMiniAlloc = NULL;
-    D3DKMT_HANDLE SharedKmtAlloc = 0;
-    PHYSICAL_ADDRESS SharedPhys = { 0 };
-    SIZE_T SharedSize = 0;
+    HANDLE SourceDeviceSpecific = NULL;
+    HANDLE DestinationDeviceSpecific = NULL;
     PVOID DmaBuf = NULL;
     PVOID PrivBuf = NULL;
     /*
@@ -652,13 +817,10 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
         PVOID pDevice; /* first field in VBoxMPTypes.h VBOXWDDM_CONTEXT */
     } RXGK_VBOXWDDM_CONTEXT_MIN, *PRXGK_VBOXWDDM_CONTEXT_MIN;
 
-    typedef struct _RXGK_VBOXWDDM_OPENALLOCATION_MIN
-    {
-        LIST_ENTRY Link;      /* first field in VBoxMPTypes.h VBOXWDDM_OPENALLOCATION */
-        D3DKMT_HANDLE hAlloc; /* second */
-        PVOID pAllocation;    /* third */
-        PVOID pDevice;        /* fourth */
-    } RXGK_VBOXWDDM_OPENALLOCATION_MIN, *PRXGK_VBOXWDDM_OPENALLOCATION_MIN;
+    DPRINT("RxgkWin32kPresent: ENTRY Args=%p hContext=%p hSource=%p hDestination=%p\n",
+            Args, Args ? (PVOID)(ULONG_PTR)Args->hContext : NULL,
+            Args ? (PVOID)(ULONG_PTR)Args->hSource : NULL,
+            Args ? (PVOID)(ULONG_PTR)Args->hDestination : NULL);
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -699,21 +861,6 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
             (PVOID)(ULONG_PTR)Args->hContext,
             (PVOID)(ULONG_PTR)MiniportContext);
 
-    /* Determine the destination allocation. If none is provided, use shared primary. */
-    if (Args->hDestination == 0)
-    {
-        if (!RxgkSharedPrimaryQuery(&SharedPrimary, NULL, &SharedKmtAlloc, &SharedMiniAlloc, &SharedPhys, &SharedSize) ||
-            SharedPrimary == 0 || SharedMiniAlloc == NULL)
-        {
-            return STATUS_NOT_SUPPORTED;
-        }
-    }
-    else
-    {
-        /* Still try to learn shared-primary handles for KMT->miniport handle translation. */
-        (void)RxgkSharedPrimaryQuery(&SharedPrimary, NULL, &SharedKmtAlloc, &SharedMiniAlloc, &SharedPhys, &SharedSize);
-    }
-
     /* Build destination-space sub-rects from source-space sub-rects (simple translation). */
     SubCnt = Args->SubRectCnt;
     if (SubCnt != 0 && Args->pSrcSubRects)
@@ -741,7 +888,6 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             ExFreePoolWithTag(DstSubs, 'sRdP');
-            __debugbreak();
             return STATUS_ACCESS_VIOLATION;
         }
         _SEH2_END;
@@ -759,7 +905,8 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     }
 
     PresentArgs = (DXGKARG_PRESENT*)ExAllocatePoolWithTag(NonPagedPool, sizeof(*PresentArgs), 'rPdP');
-    AllocList = (DXGK_ALLOCATIONLIST*)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGK_ALLOCATIONLIST) * 2, 'lPdP');
+    /* Allocate 3 elements (indices 0, 1, 2) - we use indices 1 (source) and 2 (destination) */
+    AllocList = (DXGK_ALLOCATIONLIST*)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGK_ALLOCATIONLIST) * 3, 'lPdP');
     DmaBuf = ExAllocatePoolWithTag(NonPagedPool, DmaSize, 'bMdP');
     PrivBuf = ExAllocatePoolWithTag(NonPagedPool, PrivSize, 'pMdP');
     PatchOutCount = 0xC00;
@@ -781,142 +928,63 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     RtlZeroMemory(PatchOut, sizeof(D3DDDI_PATCHLOCATIONLIST) * PatchOutCount);
 
     RtlZeroMemory(PresentArgs, sizeof(*PresentArgs));
-    RtlZeroMemory(AllocList, sizeof(DXGK_ALLOCATIONLIST) * 2);
+    RtlZeroMemory(AllocList, sizeof(DXGK_ALLOCATIONLIST) * 3);
     /*
-     * IMPORTANT: D3DKMT_PRESENT carries user-visible allocation handles (KMT).
+     * Open source and destination allocations for this device.
+     * D3DKMT_PRESENT carries user-visible allocation handles (KMT).
      * VBox DxgkDdiPresent expects device-specific allocations (miniport handles).
-     *
-     * For now we only support the shared-primary allocation mapping:
-     * - If caller passes hSource==0 (CDD does), use shared primary as source.
-     * - If caller passes shared-primary KMT allocation handle, translate to miniport allocation.
-     * - If destination is 0, use shared primary as destination.
      */
-    /*
-     * For now only the shared-primary allocation is supported for CDD presents.
-     * Open it for this device to get the per-device open allocation pointer VBox expects.
-     */
-    if (SharedKmtAlloc == 0)
-        return STATUS_NOT_SUPPORTED;
-
-    DXGK_OPENALLOCATIONINFO OpenInfo;
-    DXGKARG_OPENALLOCATION OpenArgs;
-    HANDLE OpenDeviceSpecific = NULL;
-    PVOID AllocPrivData = NULL;
-    UINT AllocPrivSize = 0;
-
-    if (!RxgkSharedPrimaryGetAllocationPrivateData(&AllocPrivData, &AllocPrivSize) || !AllocPrivData || AllocPrivSize == 0)
-        return STATUS_NOT_SUPPORTED;
-
-    RtlZeroMemory(&OpenInfo, sizeof(OpenInfo));
-    OpenInfo.hAllocation = SharedKmtAlloc;
-    OpenInfo.pPrivateDriverData = AllocPrivData;
-    OpenInfo.PrivateDriverDataSize = AllocPrivSize;
-    OpenInfo.hDeviceSpecificAllocation = NULL; /* out */
-
-    RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
-    OpenArgs.NumAllocations = 1;
-    OpenArgs.pOpenAllocation = &OpenInfo;
-    OpenArgs.pPrivateDriverData = NULL;
-    OpenArgs.PrivateDriverSize = 0;
-    OpenArgs.Flags.Value = 0;
-    OpenArgs.SubresourceIndex = 0;
-    OpenArgs.SubresourceOffset = 0;
-    OpenArgs.Pitch = 0;
-
-    /*
-     * Our KMT device handle isn't currently plumbed into Present. Use the miniport device
-     * derived from the context, if available, otherwise fall back to the raw pointer stored
-     * in the device map by using the only device we have.
-     *
-     * NOTE: MiniportDevice lookup from Args->hDevice is not reliable in bring-up;
-     * for CDD we always use the same device/context, so this is sufficient.
-     */
-    /* MiniportDevice is derived from the context via RxgkKmtContextDeviceLookup. */
-
-    Status = RxgkDriverExtension->DxgkDdiOpenAllocation(MiniportDevice, &OpenArgs);
-    if (!NT_SUCCESS(Status) || OpenInfo.hDeviceSpecificAllocation == NULL)
+    DPRINT("RxgkWin32kPresent: Opening source allocation hSource=%p MiniportDevice=%p\n",
+            (PVOID)(ULONG_PTR)Args->hSource, (PVOID)(ULONG_PTR)MiniportDevice);
+    Status = RxgkPresentOpenAllocationForDevice(MiniportDevice, Args->hSource, &SourceDeviceSpecific);
+    if (!NT_SUCCESS(Status))
     {
-        DPRINT("RxgkWin32kPresent: DxgkDdiOpenAllocation failed 0x%08X hDevSpec=%p\n",
-                Status, OpenInfo.hDeviceSpecificAllocation);
-        return Status ? Status : STATUS_INVALID_PARAMETER;
-    }
-    OpenDeviceSpecific = OpenInfo.hDeviceSpecificAllocation;
-    DPRINT("RxgkWin32kPresent: OpenAllocation: KmtAlloc=%p -> DevSpec=%p (MiniAlloc=%p Phys=%08X:%08X Size=%Iu)\n",
-            (PVOID)(ULONG_PTR)SharedKmtAlloc,
-            (PVOID)(ULONG_PTR)OpenDeviceSpecific,
-            (PVOID)(ULONG_PTR)SharedMiniAlloc,
-            (ULONG)SharedPhys.HighPart,
-            (ULONG)SharedPhys.LowPart,
-            SharedSize);
-
-    /* Dump VBox object pointers we are about to hand to GaDxgkDdiPresent. */
-    _SEH2_TRY
-    {
-        PRXGK_VBOXWDDM_CONTEXT_MIN Ctx = (PRXGK_VBOXWDDM_CONTEXT_MIN)MiniportContext;
-        DPRINT("RxgkWin32kPresent: VBoxCtx@%p pDevice=%p\n",
-                (PVOID)(ULONG_PTR)MiniportContext,
-                (PVOID)(ULONG_PTR)Ctx->pDevice);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        DPRINT1("RxgkWin32kPresent: Exception reading VBoxCtx@%p\n", (PVOID)(ULONG_PTR)MiniportContext);
-    }
-    _SEH2_END;
-
-    _SEH2_TRY
-    {
-        PRXGK_VBOXWDDM_OPENALLOCATION_MIN Oa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)OpenDeviceSpecific;
-        DPRINT("RxgkWin32kPresent: VBoxOA@%p hAlloc=%p pAllocation=%p pDevice=%p\n",
-                (PVOID)(ULONG_PTR)OpenDeviceSpecific,
-                (PVOID)(ULONG_PTR)Oa->hAlloc,
-                (PVOID)(ULONG_PTR)Oa->pAllocation,
-                (PVOID)(ULONG_PTR)Oa->pDevice);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        DPRINT1("RxgkWin32kPresent: Exception reading VBoxOA@%p\n", (PVOID)(ULONG_PTR)OpenDeviceSpecific);
-    }
-    _SEH2_END;
-
-    /* Validate OpenDeviceSpecific before using it. */
-    if (OpenDeviceSpecific == NULL)
-    {
-        DPRINT1("RxgkWin32kPresent: OpenDeviceSpecific is NULL after DxgkDdiOpenAllocation\n");
+        DPRINT("RxgkWin32kPresent: Failed to open source allocation: 0x%08X\n", Status);
         if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
         if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
         if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
         if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
         if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
         if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
-        return STATUS_INVALID_PARAMETER;
+        return Status;
     }
 
-    /* Initialize allocation list entries. */
-    RtlZeroMemory(&AllocList[RXGK_PRESENT_SOURCE_INDEX], sizeof(DXGK_ALLOCATIONLIST));
-    RtlZeroMemory(&AllocList[RXGK_PRESENT_DESTINATION_INDEX], sizeof(DXGK_ALLOCATIONLIST));
-    AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = OpenDeviceSpecific;
-    AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = OpenDeviceSpecific;
-    /* SegmentId and PhysicalAddress remain 0 (zeroed above) as per bring-up comment below. */
-    
-    /* Validate OpenDeviceSpecific structure before passing to miniport */
-    _SEH2_TRY
+    /* For destination, use source if destination is 0 or same as source. */
+    if (Args->hDestination == 0 || Args->hDestination == Args->hSource)
     {
-        PRXGK_VBOXWDDM_OPENALLOCATION_MIN Oa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)OpenDeviceSpecific;
-        if (Oa->pDevice == NULL || Oa->pAllocation == NULL)
+        DPRINT("RxgkWin32kPresent: Using source allocation as destination (hDest=%p == hSrc=%p)\n",
+                (PVOID)(ULONG_PTR)Args->hDestination, (PVOID)(ULONG_PTR)Args->hSource);
+        DestinationDeviceSpecific = SourceDeviceSpecific;
+    }
+    else
+    {
+        DPRINT("RxgkWin32kPresent: Opening destination allocation hDestination=%p\n", (PVOID)(ULONG_PTR)Args->hDestination);
+        Status = RxgkPresentOpenAllocationForDevice(MiniportDevice, Args->hDestination, &DestinationDeviceSpecific);
+        if (!NT_SUCCESS(Status))
         {
-            DPRINT1("RxgkWin32kPresent: OpenDeviceSpecific has NULL pDevice or pAllocation\n");
+            DPRINT("RxgkWin32kPresent: Failed to open destination allocation: 0x%08X\n", Status);
+            /* Close source allocation before returning. */
+            if (SourceDeviceSpecific && RxgkDriverExtension && RxgkDriverExtension->DxgkDdiCloseAllocation)
+            {
+                DXGKARG_CLOSEALLOCATION CloseArgs;
+                CloseArgs.NumAllocations = 1;
+                CloseArgs.pOpenHandleList = &SourceDeviceSpecific;
+                RxgkDriverExtension->DxgkDdiCloseAllocation(MiniportDevice, &CloseArgs);
+            }
             if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
             if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
             if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
             if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
             if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
             if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
-            return STATUS_INVALID_PARAMETER;
+            return Status;
         }
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+
+    /* Validate device-specific allocations. */
+    if (SourceDeviceSpecific == NULL || DestinationDeviceSpecific == NULL)
     {
-        DPRINT1("RxgkWin32kPresent: Exception validating OpenDeviceSpecific structure\n");
+        DPRINT("RxgkWin32kPresent: NULL device-specific allocation\n");
         if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
         if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
         if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
@@ -925,20 +993,173 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
         if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
         return STATUS_INVALID_PARAMETER;
     }
+
+    /* Determine operation type early so we can validate allocations correctly. */
+    BOOLEAN IsFlip = FALSE;
+    BOOLEAN IsBlt = FALSE;
+    
+    /* Default to BLT if destination is specified and BLT is requested or no flags are set.
+     * Only use FLIP if explicitly requested AND destination is 0 or Flip flag is set.
+     * This ensures we use BLT by default (which works) and only use FLIP when explicitly requested. */
+    if (Args->Flags.Blt || (Args->hDestination != 0 && !Args->Flags.Flip))
+    {
+        IsBlt = TRUE;
+    }
+    else if (Args->Flags.Flip && (Args->hDestination == 0 || Args->Flags.Flip))
+    {
+        IsFlip = TRUE;
+    }
+    else
+    {
+        /* Default to BLT if unsure - BLT works, FLIP crashes */
+        IsBlt = TRUE;
+        DPRINT("RxgkWin32kPresent: No clear operation type, defaulting to BLT\n");
+    }
+    
+    DPRINT("RxgkWin32kPresent: Operation type determination: hSource=%p hDest=%p Flags.Blt=%u Flags.Flip=%u -> IsBlt=%u IsFlip=%u\n",
+            (PVOID)(ULONG_PTR)Args->hSource, (PVOID)(ULONG_PTR)Args->hDestination,
+            (UINT)Args->Flags.Blt, (UINT)Args->Flags.Flip, (UINT)IsBlt, (UINT)IsFlip);
+
+    /* Validate device-specific allocation structures. */
+    _SEH2_TRY
+    {
+        PRXGK_VBOXWDDM_OPENALLOCATION_MIN SourceOa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)SourceDeviceSpecific;
+        
+        if (SourceOa->pDevice == NULL || SourceOa->pAllocation == NULL)
+        {
+            DPRINT("RxgkWin32kPresent: Invalid source device-specific allocation structure\n");
+            if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+            if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+            if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+            if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+            if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+            if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+        }
+
+        DPRINT("RxgkWin32kPresent: SourceOA@%p pDevice=%p pAllocation=%p\n",
+                (PVOID)(ULONG_PTR)SourceDeviceSpecific,
+                (PVOID)(ULONG_PTR)SourceOa->pDevice,
+                (PVOID)(ULONG_PTR)SourceOa->pAllocation);
+        
+        /* For FLIP operations, try to validate that the allocation structure is accessible. */
+        if (IsFlip && !IsBlt)
+        {
+            _SEH2_TRY
+            {
+                /* Try to access the allocation structure to see if it's valid. */
+                /* We can't access AllocData.SurfDesc.VidPnSourceId directly because we don't know the structure layout,
+                 * but we can at least verify the allocation pointer is valid by checking if it's in kernel space. */
+                PVOID pAlloc = SourceOa->pAllocation;
+                if (pAlloc != NULL && (ULONG_PTR)pAlloc >= 0xFFFF800000000000ULL)
+                {
+                    DPRINT("RxgkWin32kPresent: FLIP - source allocation pointer looks valid (kernel space)\n");
+                }
+                else
+                {
+                    DPRINT("RxgkWin32kPresent: FLIP - source allocation pointer looks invalid: %p\n", pAlloc);
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DPRINT("RxgkWin32kPresent: Exception while validating source allocation structure\n");
+            }
+            _SEH2_END;
+        }
+
+        /* Only validate destination allocation if it's needed (BLT operations). */
+        if (IsBlt && DestinationDeviceSpecific != NULL)
+        {
+            PRXGK_VBOXWDDM_OPENALLOCATION_MIN DestOa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)DestinationDeviceSpecific;
+            
+            if (DestOa->pDevice == NULL || DestOa->pAllocation == NULL)
+            {
+                DPRINT("RxgkWin32kPresent: Invalid destination device-specific allocation structure\n");
+                if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+                if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+                if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+                if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+                if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+                if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+                _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+            }
+
+            DPRINT("RxgkWin32kPresent: DestOA@%p pDevice=%p pAllocation=%p\n",
+                    (PVOID)(ULONG_PTR)DestinationDeviceSpecific,
+                    (PVOID)(ULONG_PTR)DestOa->pDevice,
+                    (PVOID)(ULONG_PTR)DestOa->pAllocation);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT("RxgkWin32kPresent: Exception validating device-specific allocations\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
     _SEH2_END;
 
-    /*
-     * IMPORTANT (bring-up):
-     * VBox GA present will *generate* patch entries and expects dxgkrnl/VidMm to
-     * patch the GMRFB offset based on residency. We do not implement VidMm yet,
-     * so DO NOT provide a fake SegmentId/PhysicalAddress tuple here; it can cause
-     * GA to consume bogus offsets and trigger #GP.
-     *
-     * Leave SegmentId==0 so GA's SvgaGenDefineGMRFB gets a safe 0 offset; the
-     * present may not actually update the screen until residency/patching exists,
-     * but it should stop crashing the kernel.
-     */
+    /* Operation type was already determined above during validation. */
 
+    /* Initialize allocation list entries. */
+    RtlZeroMemory(&AllocList[RXGK_PRESENT_SOURCE_INDEX], sizeof(DXGK_ALLOCATIONLIST));
+    RtlZeroMemory(&AllocList[RXGK_PRESENT_DESTINATION_INDEX], sizeof(DXGK_ALLOCATIONLIST));
+    AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = SourceDeviceSpecific;
+    
+    /* For FLIP operations, VBox only uses the source allocation. */
+    /* For BLT operations, we need both source and destination. */
+    if (IsFlip && !IsBlt)
+    {
+        /* FLIP: destination allocation should be NULL. */
+        AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = NULL;
+    }
+    else
+    {
+        /* BLT: set destination allocation and mark it as writable. */
+        AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = DestinationDeviceSpecific;
+        AllocList[RXGK_PRESENT_DESTINATION_INDEX].WriteOperation = 1;
+    }
+    
+    /* Set SegmentId and PhysicalAddress for shared primary allocations.
+     * VBox expects SegmentId=1 for VRAM allocations (shared primary is in VRAM).
+     * This is critical for VBox's gaPresentBlt to recognize the allocation type correctly.
+     */
+    PHYSICAL_ADDRESS SharedPrimaryPhys = {0};
+    if (RxgkSharedPrimaryQuery(NULL, NULL, NULL, NULL, &SharedPrimaryPhys, NULL))
+    {
+        /* Check if source is shared primary. */
+        D3DKMT_HANDLE SharedPrimaryAlloc = 0;
+        if (RxgkSharedPrimaryQuery(NULL, NULL, &SharedPrimaryAlloc, NULL, NULL, NULL))
+        {
+            if (Args->hSource == SharedPrimaryAlloc)
+            {
+                AllocList[RXGK_PRESENT_SOURCE_INDEX].SegmentId = 1; /* VRAM segment */
+                AllocList[RXGK_PRESENT_SOURCE_INDEX].PhysicalAddress = SharedPrimaryPhys;
+                DPRINT("RxgkWin32kPresent: Set source allocation SegmentId=1 PhysicalAddress=0x%llX\n",
+                        SharedPrimaryPhys.QuadPart);
+            }
+            
+            /* Check if destination is shared primary. */
+            if (Args->hDestination == SharedPrimaryAlloc || Args->hDestination == Args->hSource)
+            {
+                AllocList[RXGK_PRESENT_DESTINATION_INDEX].SegmentId = 1; /* VRAM segment */
+                AllocList[RXGK_PRESENT_DESTINATION_INDEX].PhysicalAddress = SharedPrimaryPhys;
+                DPRINT("RxgkWin32kPresent: Set destination allocation SegmentId=1 PhysicalAddress=0x%llX\n",
+                        SharedPrimaryPhys.QuadPart);
+            }
+        }
+    }
+
+    /* Save original buffer pointers - VBox's Present will advance them past the data it writes. */
+    PVOID OriginalDmaBuf = DmaBuf;
+    PVOID OriginalPrivBuf = PrivBuf;
+    UINT OriginalDmaSize = DmaSize;
+    UINT OriginalPrivSize = PrivSize;
+    
     PresentArgs->pDmaBuffer = DmaBuf;
     PresentArgs->DmaSize = DmaSize;
     PresentArgs->pDmaBufferPrivateData = PrivBuf;
@@ -954,37 +1175,23 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     PresentArgs->pDstSubRects = DstSubs;
     PresentArgs->FlipInterval = Args->FlipInterval;
     PresentArgs->Flags.Value = 0;
-    PresentArgs->Flags.Blt = Args->Flags.Blt ? 1 : 0;
-    PresentArgs->Flags.ColorFill = Args->Flags.ColorFill ? 1 : 0;
-    PresentArgs->Flags.Flip = Args->Flags.Flip ? 1 : 0;
-    PresentArgs->Flags.FlipWithNoWait = Args->Flags.FlipDoNotWait ? 1 : 0;
-    PresentArgs->Flags.SrcColorKey = Args->Flags.SrcColorKey ? 1 : 0;
-    PresentArgs->Flags.DstColorKey = Args->Flags.DstColorKey ? 1 : 0;
-    PresentArgs->Flags.LinearToSrgb = Args->Flags.LinearToSrgb ? 1 : 0;
-    PresentArgs->Flags.Rotate = Args->Flags.Rotate ? 1 : 0;
-    PresentArgs->Flags.RedirectedFlip = Args->Flags.RedirectedFlip ? 1 : 0;
-    PresentArgs->NumSrcAllocations = 1;
-    PresentArgs->NumDstAllocations = 1;
-
-    /* Default to BLT if destination is specified; otherwise assume FLIP. */
-    if (Args->hDestination != 0 && !Args->Flags.Flip)
-        PresentArgs->Flags.Blt = 1;
-    if (Args->hDestination == 0 && !Args->Flags.Blt)
-        PresentArgs->Flags.Flip = 1;
-
-    /*
-     * VBox GA present (Mesa3D) asserts in the BLT path when both source and destination
-     * allocations are STD_SHAREDPRIMARYSURFACE (CDD often presents primary->primary).
-     * In that case, prefer the FLIP path, which only consumes the source allocation.
-     */
-    if (PresentArgs->Flags.Blt &&
-        Args->hSource != 0 &&
-        Args->hDestination != 0 &&
-        Args->hSource == Args->hDestination)
+    if (IsFlip)
     {
-        PresentArgs->Flags.Blt = 0;
+        /* VBox expects Flags.Value == 4 (only Flip flag set) for FLIP operations. */
         PresentArgs->Flags.Flip = 1;
+        PresentArgs->Flags.FlipWithNoWait = Args->Flags.FlipDoNotWait ? 1 : 0;
+        PresentArgs->Flags.RedirectedFlip = Args->Flags.RedirectedFlip ? 1 : 0;
+        /* Don't set other flags for FLIP - VBox asserts Flags.Value == 4. */
     }
+    else if (IsBlt)
+    {
+        /* VBox expects Flags.Value == 1 (only Blt flag set) for BLT operations. */
+        PresentArgs->Flags.Blt = 1;
+        /* Don't set other flags for BLT - VBox asserts Flags.Value == 1. */
+        /* Note: VBox's BLT implementation doesn't support ColorFill, ColorKey, etc. yet. */
+    }
+    PresentArgs->NumSrcAllocations = 1;
+    PresentArgs->NumDstAllocations = IsBlt ? 1 : 0; /* FLIP doesn't use destination allocation */
 
     /* If we synthesized the single-subrect case, fill it now. */
     if (SubCnt == 1 && (Args->SubRectCnt == 0 || !Args->pSrcSubRects) && DstSubs)
@@ -998,12 +1205,12 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     PresentArgs->PrivateDriverDataSize = 0;
     PresentArgs->pPrivateDriverData = NULL;
 
-    DPRINT("RxgkWin32kPresent: PresentArgs: SubRectCnt=%u pDstSubRects=%p pAllocList=%p A0=%p A1=%p\n",
+    DPRINT("RxgkWin32kPresent: PresentArgs: SubRectCnt=%u pDstSubRects=%p pAllocList=%p Src[%d]=%p Dst[%d]=%p\n",
             (UINT)PresentArgs->SubRectCnt,
             (PVOID)(ULONG_PTR)PresentArgs->pDstSubRects,
             (PVOID)(ULONG_PTR)PresentArgs->pAllocationList,
-            (PVOID)(ULONG_PTR)AllocList[0].hDeviceSpecificAllocation,
-            (PVOID)(ULONG_PTR)AllocList[1].hDeviceSpecificAllocation);
+            RXGK_PRESENT_SOURCE_INDEX, (PVOID)(ULONG_PTR)AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation,
+            RXGK_PRESENT_DESTINATION_INDEX, (PVOID)(ULONG_PTR)AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation);
 
     DPRINT("RxgkWin32kPresent: Calling DxgkDdiPresent(Ctx=%p, Present=%p, PatchOut=%p/%u Dma=%p/%x Priv=%p/%x)\n",
             (PVOID)(ULONG_PTR)MiniportContext,
@@ -1016,7 +1223,33 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     /* Validate critical pointers before calling miniport. */
     if (!MiniportContext || !PresentArgs || !AllocList || !DmaBuf || !PrivBuf || !PatchOut)
     {
-        DPRINT1("RxgkWin32kPresent: Invalid parameters before DxgkDdiPresent call\n");
+        DPRINT("RxgkWin32kPresent: Invalid parameters before DxgkDdiPresent call\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate allocation list entries are properly set. */
+    /* Source allocation must always be valid. */
+    if (AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation == NULL)
+    {
+        DPRINT("RxgkWin32kPresent: Source allocation is NULL\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        return STATUS_INVALID_PARAMETER;
+    }
+    /* Destination allocation must be valid for BLT operations, but can be NULL for FLIP. */
+    if (PresentArgs->Flags.Blt && AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation == NULL)
+    {
+        DPRINT("RxgkWin32kPresent: Destination allocation is NULL for BLT operation\n");
         if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
         if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
         if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
@@ -1027,17 +1260,288 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     }
 
     /* Wrap miniport call in SEH to catch any access violations. */
+    DPRINT("RxgkWin32kPresent: About to call DxgkDdiPresent (IsFlip=%u IsBlt=%u Flags.Value=0x%08X)\n",
+            (UINT)IsFlip, (UINT)IsBlt, (UINT)PresentArgs->Flags.Value);
+    DPRINT("RxgkWin32kPresent: AllocationList: Src[0]=%p Dst[1]=%p NumSrc=%u NumDst=%u\n",
+            (PVOID)(ULONG_PTR)AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation,
+            (PVOID)(ULONG_PTR)AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation,
+            (UINT)PresentArgs->NumSrcAllocations, (UINT)PresentArgs->NumDstAllocations);
+    DPRINT("RxgkWin32kPresent: SrcRect=[%ld,%ld,%ld,%ld] DstRect=[%ld,%ld,%ld,%ld] SubRectCnt=%u\n",
+            PresentArgs->SrcRect.left, PresentArgs->SrcRect.top, PresentArgs->SrcRect.right, PresentArgs->SrcRect.bottom,
+            PresentArgs->DstRect.left, PresentArgs->DstRect.top, PresentArgs->DstRect.right, PresentArgs->DstRect.bottom,
+            (UINT)PresentArgs->SubRectCnt);
+    /* Validate allocation structures before calling Present */
+    _SEH2_TRY
+    {
+        if (AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation)
+        {
+            PRXGK_VBOXWDDM_OPENALLOCATION_MIN pSrcOa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
+            DPRINT("RxgkWin32kPresent: SrcOA: pDevice=%p pAllocation=%p\n",
+                    (PVOID)(ULONG_PTR)pSrcOa->pDevice, (PVOID)(ULONG_PTR)pSrcOa->pAllocation);
+        }
+        if (AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation)
+        {
+            PRXGK_VBOXWDDM_OPENALLOCATION_MIN pDstOa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
+            DPRINT("RxgkWin32kPresent: DstOA: pDevice=%p pAllocation=%p\n",
+                    (PVOID)(ULONG_PTR)pDstOa->pDevice, (PVOID)(ULONG_PTR)pDstOa->pAllocation);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT("RxgkWin32kPresent: Exception validating allocation structures before Present: Code=0x%08X\n",
+                _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
     _SEH2_TRY
     {
         Status = RxgkDriverExtension->DxgkDdiPresent(MiniportContext, PresentArgs);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        DPRINT1("RxgkWin32kPresent: Exception in DxgkDdiPresent: Code=0x%08X\n",
-                _SEH2_GetExceptionCode());
-        Status = STATUS_ACCESS_VIOLATION;
+        ULONG ExceptionCode = _SEH2_GetExceptionCode();
+        DPRINT("RxgkWin32kPresent: Exception in DxgkDdiPresent: Code=0x%08X (IsFlip=%u IsBlt=%u)\n",
+                ExceptionCode, (UINT)IsFlip, (UINT)IsBlt);
+        /* Map exception codes to appropriate NTSTATUS */
+        if (ExceptionCode == STATUS_ACCESS_VIOLATION || ExceptionCode == STATUS_IN_PAGE_ERROR)
+            Status = STATUS_ACCESS_VIOLATION;
+        else if (ExceptionCode == STATUS_UNSUCCESSFUL)
+            Status = STATUS_UNSUCCESSFUL;
+        else
+            Status = STATUS_ACCESS_VIOLATION;
     }
     _SEH2_END;
+    DPRINT("RxgkWin32kPresent: DxgkDdiPresent returned 0x%08X\n", Status);
+
+    /* If Present succeeded, patch the DMA buffer (Vista) and/or submit it (Win10+). */
+    if (NT_SUCCESS(Status) && RxgkDriverExtension)
+    {
+        /* Count how many patch locations were returned by Present. */
+        UINT PatchCount = 0;
+        if (PatchOut && PresentArgs->pPatchLocationListOut && PresentArgs->pPatchLocationListOut > PatchOut)
+        {
+            /* Calculate number of entries, not bytes */
+            SIZE_T ByteDiff = (PUCHAR)PresentArgs->pPatchLocationListOut - (PUCHAR)PatchOut;
+            PatchCount = (UINT)(ByteDiff / sizeof(D3DDDI_PATCHLOCATIONLIST));
+            DPRINT("RxgkWin32kPresent: Present returned %u patch locations (PatchOut=%p pPatchLocationListOut=%p ByteDiff=%Iu)\n",
+                    PatchCount, PatchOut, PresentArgs->pPatchLocationListOut, ByteDiff);
+        }
+        else
+        {
+            DPRINT("RxgkWin32kPresent: No patch locations returned (PatchOut=%p pPatchLocationListOut=%p)\n",
+                    PatchOut, PresentArgs->pPatchLocationListOut ? PresentArgs->pPatchLocationListOut : NULL);
+        }
+
+        /* Calculate how much data was actually written by Present (it advances the pointers). */
+        UINT DmaBufferUsed = (UINT)((PUCHAR)PresentArgs->pDmaBuffer - (PUCHAR)OriginalDmaBuf);
+        UINT PrivBufferUsed = (UINT)((PUCHAR)PresentArgs->pDmaBufferPrivateData - (PUCHAR)OriginalPrivBuf);
+        
+        DPRINT("RxgkWin32kPresent: DMA buffer calculation: Original=%p Current=%p Used=%u OriginalSize=%u\n",
+                OriginalDmaBuf, PresentArgs->pDmaBuffer, DmaBufferUsed, OriginalDmaSize);
+        DPRINT("RxgkWin32kPresent: Private buffer calculation: Original=%p Current=%p Used=%u OriginalSize=%u\n",
+                OriginalPrivBuf, PresentArgs->pDmaBufferPrivateData, PrivBufferUsed, OriginalPrivSize);
+        
+        /* VBox writes GARENDERDATA to private buffer with cbData containing the actual command size.
+         * Read it to get the real DMA buffer size if DMA pointer wasn't advanced.
+         */
+        typedef struct _RXGK_GARENDERDATA_MIN
+        {
+            UINT32 u32DataType;
+            UINT32 cbData;
+            PVOID pFenceObject;
+            PVOID pvDmaBuffer;
+            PVOID pHwRenderData;
+        } RXGK_GARENDERDATA_MIN, *PRXGK_GARENDERDATA_MIN;
+        
+        if (DmaBufferUsed == 0 && PrivBufferUsed >= sizeof(RXGK_GARENDERDATA_MIN))
+        {
+            /* Read the actual command size from GARENDERDATA */
+            _SEH2_TRY
+            {
+                PRXGK_GARENDERDATA_MIN pRenderData = (PRXGK_GARENDERDATA_MIN)OriginalPrivBuf;
+                if (pRenderData->cbData > 0 && pRenderData->cbData <= OriginalDmaSize)
+                {
+                    DmaBufferUsed = pRenderData->cbData;
+                    DPRINT("RxgkWin32kPresent: Read command size from GARENDERDATA: %u bytes (DataType=%u)\n",
+                            DmaBufferUsed, pRenderData->u32DataType);
+                }
+                else
+                {
+                    DPRINT("RxgkWin32kPresent: WARNING: Invalid cbData in GARENDERDATA: %u (max=%u) - using estimated size\n",
+                            pRenderData->cbData, OriginalDmaSize);
+                    DmaBufferUsed = 512; /* Fallback estimate */
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DPRINT("RxgkWin32kPresent: Exception reading GARENDERDATA: Code=0x%08X - using estimated size\n",
+                        _SEH2_GetExceptionCode());
+                DmaBufferUsed = 512; /* Fallback estimate */
+            }
+            _SEH2_END;
+        }
+        else if (DmaBufferUsed == 0)
+        {
+            DPRINT("RxgkWin32kPresent: WARNING: Neither DMA nor private buffer advanced - VBox may not have written commands\n");
+            /* Don't use fallback - if nothing was written, don't call Patch */
+        }
+        
+        if (PrivBufferUsed == 0 && DmaBufferUsed > 0) 
+        {
+            /* VBox always writes GARENDERDATA (at least 32 bytes) when it writes commands */
+            PrivBufferUsed = sizeof(RXGK_GARENDERDATA_MIN);
+            DPRINT("RxgkWin32kPresent: Private buffer not advanced but DMA buffer was - using GARENDERDATA size\n");
+        }
+
+        /* Vista: Patch the DMA buffer with physical addresses based on patch location list.
+         * IMPORTANT: Call DxgkDdiPatch even if there are no patch locations, as VBox's Patch
+         * function calls SvgaFlush() which submits the DMA buffer to the GPU. This is critical
+         * for screen updates, especially for BLT operations that may not have patch locations.
+         */
+        if (DmaBufferUsed > 0 && RxgkDriverExtension->DxgkDdiPatch)
+        {
+            DXGKARG_PATCH PatchArgs;
+            RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
+            
+            PatchArgs.hContext = MiniportContext; /* Context handle goes in PatchArgs */
+            PatchArgs.DmaBufferSegmentId = PresentArgs->DmaBufferSegmentId;
+            PatchArgs.DmaBufferPhysicalAddress = PresentArgs->DmaBufferPhysicalAddress;
+            /* Use original buffer pointers - Present advanced them, but we need the start for patching. */
+            PatchArgs.pDmaBuffer = OriginalDmaBuf;
+            PatchArgs.DmaBufferSize = OriginalDmaSize;
+            PatchArgs.DmaBufferSubmissionStartOffset = 0;
+            PatchArgs.DmaBufferSubmissionEndOffset = DmaBufferUsed;
+            PatchArgs.pDmaBufferPrivateData = OriginalPrivBuf;
+            PatchArgs.DmaBufferPrivateDataSize = PrivBufferUsed;
+            PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
+            PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = PrivBufferUsed;
+            PatchArgs.pAllocationList = AllocList;
+            PatchArgs.AllocationListSize = 3; /* We use indices 0, 1, 2 (source=1, dest=2) */
+            PatchArgs.pPatchLocationList = PatchOut; /* May be NULL if no patch locations */
+            PatchArgs.PatchLocationListSize = PatchCount;
+            PatchArgs.PatchLocationListSubmissionStart = 0;
+            PatchArgs.PatchLocationListSubmissionLength = PatchCount;
+            PatchArgs.SubmissionFenceId = 0; /* TODO: Implement fence tracking */
+            PatchArgs.Flags.Value = 0;
+            PatchArgs.Flags.Present = 1;
+            PatchArgs.EngineOrdinal = 0;
+
+            /* VBox's Patch expects hAdapter (adapter handle) as first parameter, not hContext */
+            HANDLE MiniportAdapter = RxgkDriverExtension ? RxgkDriverExtension->MiniportContext : NULL;
+            DPRINT("RxgkWin32kPresent: Calling DxgkDdiPatch (Adapter=%p Context=%p PatchCount=%u DmaBuf=%p DmaSize=%u PrivBuf=%p PrivSize=%u)\n",
+                    MiniportAdapter, MiniportContext, PatchCount, OriginalDmaBuf, DmaBufferUsed, OriginalPrivBuf, PrivBufferUsed);
+            
+            NTSTATUS PatchStatus = STATUS_SUCCESS; /* Declare outside SEH block for use after */
+            _SEH2_TRY
+            {
+                /* VBox expects hAdapter, not hContext - pass adapter handle */
+                PatchStatus = RxgkDriverExtension->DxgkDdiPatch(MiniportAdapter, &PatchArgs);
+                if (!NT_SUCCESS(PatchStatus))
+                {
+                    DPRINT("RxgkWin32kPresent: DxgkDdiPatch failed: 0x%08X\n", PatchStatus);
+                    /* Don't fail the Present call if Patch fails - Present already succeeded */
+                }
+                else
+                {
+                    DPRINT("RxgkWin32kPresent: DxgkDdiPatch succeeded\n");
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ULONG ExceptionCode = _SEH2_GetExceptionCode();
+                DPRINT("RxgkWin32kPresent: Exception in DxgkDdiPatch: Code=0x%08X\n", ExceptionCode);
+                PatchStatus = STATUS_UNSUCCESSFUL; /* Mark as failed on exception */
+                /* Don't fail the Present call if Patch throws - Present already succeeded */
+            }
+            _SEH2_END;
+            
+            /* VBox's Patch flushes at the START, so patched commands are never submitted.
+             * If SubmitCommand is available (even though it's Win10+), use it to actually submit the commands.
+             * This is critical for screen updates - without it, commands sit in the DMA buffer unsubmitted.
+             */
+            if (NT_SUCCESS(PatchStatus) && RxgkDriverExtension->DxgkDdiSubmitCommand && DmaBufferUsed > 0)
+            {
+                DXGKARG_SUBMITCOMMAND SubmitArgs;
+                RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
+                
+                SubmitArgs.hContext = MiniportContext; /* Use hContext from union */
+                SubmitArgs.DmaBufferSegmentId = PresentArgs->DmaBufferSegmentId;
+                SubmitArgs.DmaBufferPhysicalAddress = PresentArgs->DmaBufferPhysicalAddress;
+                /* Note: DXGKARG_SUBMITCOMMAND doesn't have pDmaBuffer - miniport accesses via physical address */
+                SubmitArgs.DmaBufferSize = OriginalDmaSize;
+                SubmitArgs.DmaBufferSubmissionStartOffset = 0;
+                SubmitArgs.DmaBufferSubmissionEndOffset = DmaBufferUsed;
+                SubmitArgs.pDmaBufferPrivateData = OriginalPrivBuf;
+                SubmitArgs.DmaBufferPrivateDataSize = PrivBufferUsed;
+                SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
+                SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = PrivBufferUsed;
+                SubmitArgs.SubmissionFenceId = 0; /* TODO: Implement fence tracking */
+                SubmitArgs.VidPnSourceId = 0; /* Primary source */
+                SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+                SubmitArgs.Flags.Value = 0;
+                SubmitArgs.Flags.Present = 1;
+                SubmitArgs.EngineOrdinal = 0;
+                SubmitArgs.DmaBufferVirtualAddress = 0; /* Not used - D3DGPU_VIRTUAL_ADDRESS is ULONGLONG */
+                SubmitArgs.NodeOrdinal = 0;
+                
+                DPRINT("RxgkWin32kPresent: Calling DxgkDdiSubmitCommand after Patch (Adapter=%p Context=%p DmaSize=%u PrivSize=%u)\n",
+                        MiniportAdapter, MiniportContext, DmaBufferUsed, PrivBufferUsed);
+                _SEH2_TRY
+                {
+                    /* VBox's SubmitCommand expects hAdapter as first parameter */
+                    NTSTATUS SubmitStatus = RxgkDriverExtension->DxgkDdiSubmitCommand(MiniportAdapter, &SubmitArgs);
+                    if (!NT_SUCCESS(SubmitStatus))
+                    {
+                        DPRINT("RxgkWin32kPresent: DxgkDdiSubmitCommand failed: 0x%08X\n", SubmitStatus);
+                        /* Don't fail the Present call if SubmitCommand fails */
+                    }
+                    else
+                    {
+                        DPRINT("RxgkWin32kPresent: DxgkDdiSubmitCommand succeeded - commands submitted to GPU\n");
+                    }
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    ULONG ExceptionCode = _SEH2_GetExceptionCode();
+                    DPRINT("RxgkWin32kPresent: Exception in DxgkDdiSubmitCommand: Code=0x%08X\n", ExceptionCode);
+                }
+                _SEH2_END;
+            }
+            else if (DmaBufferUsed > 0 && !RxgkDriverExtension->DxgkDdiSubmitCommand)
+            {
+                DPRINT("RxgkWin32kPresent: WARNING: Commands patched but DxgkDdiSubmitCommand not available - commands may not be submitted to GPU\n");
+            }
+        }
+        else if (DmaBufferUsed > 0 && !RxgkDriverExtension->DxgkDdiPatch)
+        {
+            DPRINT("RxgkWin32kPresent: DMA buffer was written (%u bytes) but DxgkDdiPatch is not available - buffer will not be submitted to GPU (PatchCount=%u)\n", 
+                    DmaBufferUsed, PatchCount);
+        }
+        else if (PatchCount > 0 && !RxgkDriverExtension->DxgkDdiPatch)
+        {
+            DPRINT("RxgkWin32kPresent: Present returned %u patch locations but DxgkDdiPatch is not available - buffer may have invalid addresses\n", PatchCount);
+        }
+    }
+
+    /* Close allocations that were opened for this Present operation. */
+    /* Note: If destination == source, we only opened one allocation, so only close it once. */
+    if (SourceDeviceSpecific && RxgkDriverExtension && RxgkDriverExtension->DxgkDdiCloseAllocation)
+    {
+        DXGKARG_CLOSEALLOCATION CloseArgs;
+        if (DestinationDeviceSpecific != SourceDeviceSpecific)
+        {
+            /* Close both source and destination in one call. */
+            HANDLE Handles[2] = { SourceDeviceSpecific, DestinationDeviceSpecific };
+            CloseArgs.NumAllocations = 2;
+            CloseArgs.pOpenHandleList = Handles;
+        }
+        else
+        {
+            /* Only close source (destination is the same). */
+            CloseArgs.NumAllocations = 1;
+            CloseArgs.pOpenHandleList = &SourceDeviceSpecific;
+        }
+        RxgkDriverExtension->DxgkDdiCloseAllocation(MiniportDevice, &CloseArgs);
+    }
 
     if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
     if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');

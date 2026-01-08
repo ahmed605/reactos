@@ -79,4 +79,23 @@ VOID
 NTAPI
 RxgkKmtDeviceDpcRemove(_In_ HANDLE MiniportDevice);
 
+/* Allocation metadata table (KMT allocation handle -> private driver data). */
+NTSTATUS
+NTAPI
+RxgkKmtAllocationMetadataInsert(
+    _In_ D3DKMT_HANDLE KmtAllocation,
+    _In_opt_ PVOID pPrivateDriverData,
+    _In_ UINT PrivateDriverDataSize);
+
+NTSTATUS
+NTAPI
+RxgkKmtAllocationMetadataQuery(
+    _In_ D3DKMT_HANDLE KmtAllocation,
+    _Out_opt_ PVOID* ppPrivateDriverData,
+    _Out_opt_ PUINT pPrivateDriverDataSize);
+
+VOID
+NTAPI
+RxgkKmtAllocationMetadataRemove(_In_ D3DKMT_HANDLE KmtAllocation);
+
 

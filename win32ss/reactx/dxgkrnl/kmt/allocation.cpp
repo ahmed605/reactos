@@ -307,6 +307,157 @@ RxgkSharedPrimaryGetAllocationPrivateData(
 }
 
 /*
+ * Creates a shadow/staging surface allocation for CDD/GDI drawing.
+ * This follows the same pattern as shared primary: get standard allocation
+ * driver data from miniport, then create the allocation with that data.
+ */
+NTSTATUS
+NTAPI
+RxgkShadowSurfaceCreate(
+    _In_ UINT Width,
+    _In_ UINT Height,
+    _In_ D3DDDIFORMAT Format,
+    _In_ UINT Pitch,
+    _Out_ D3DKMT_HANDLE* phShadowAllocation)
+{
+    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA Std;
+    D3DKMDT_SHADOWSURFACEDATA ShadowData;
+    DXGKARG_CREATEALLOCATION CreateAllocArgs;
+    DXGK_ALLOCATIONINFO KernelAllocInfo;
+    PVOID AllocPriv = NULL;
+    UINT AllocPrivSize = 0;
+    NTSTATUS Status;
+
+    if (!phShadowAllocation || !RxgkDriverExtension)
+        return STATUS_INVALID_PARAMETER;
+
+    *phShadowAllocation = 0;
+
+    if (!RxgkDriverExtension->DxgkDdiGetStandardAllocationDriverData ||
+        !RxgkDriverExtension->DxgkDdiCreateAllocation)
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: Required DDIs not available\n");
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+
+    /* Set up shadow surface data */
+    RtlZeroMemory(&ShadowData, sizeof(ShadowData));
+    ShadowData.Width = Width;
+    ShadowData.Height = Height;
+    ShadowData.Format = Format;
+    ShadowData.Pitch = Pitch;  /* Driver will update this if needed */
+
+    /* First call: query size of private driver data */
+    RtlZeroMemory(&Std, sizeof(Std));
+    Std.StandardAllocationType = D3DKMDT_STANDARDALLOCATION_SHADOWSURFACE;
+    Std.pCreateShadowSurfaceData = &ShadowData;
+    Std.pAllocationPrivateDriverData = NULL;
+    Std.AllocationPrivateDriverDataSize = 0;
+    Std.pResourcePrivateDriverData = NULL;
+    Std.ResourcePrivateDriverDataSize = 0;
+    Std.PhysicalAdapterIndex = 0;
+
+    Status = RxgkDriverExtension->DxgkDdiGetStandardAllocationDriverData(
+        RxgkDriverExtension->MiniportContext,
+        &Std);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: DxgkDdiGetStandardAllocationDriverData (size query) -> 0x%08X\n", Status);
+        return Status;
+    }
+
+    AllocPrivSize = Std.AllocationPrivateDriverDataSize;
+    if (AllocPrivSize == 0)
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: miniport returned AllocationPrivateDriverDataSize=0\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    AllocPriv = ExAllocatePoolWithTag(NonPagedPool, AllocPrivSize, 'wShS');
+    if (!AllocPriv)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(AllocPriv, AllocPrivSize);
+
+    /* Second call: get the actual private driver data */
+    Std.pAllocationPrivateDriverData = AllocPriv;
+    Std.AllocationPrivateDriverDataSize = AllocPrivSize;
+
+    Status = RxgkDriverExtension->DxgkDdiGetStandardAllocationDriverData(
+        RxgkDriverExtension->MiniportContext,
+        &Std);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: DxgkDdiGetStandardAllocationDriverData (fill) -> 0x%08X\n", Status);
+        ExFreePoolWithTag(AllocPriv, 'wShS');
+        return Status;
+    }
+
+    /* Create the shadow allocation with the private driver data */
+    RtlZeroMemory(&KernelAllocInfo, sizeof(KernelAllocInfo));
+    KernelAllocInfo.pPrivateDriverData = AllocPriv;
+    KernelAllocInfo.PrivateDriverDataSize = AllocPrivSize;
+
+    RtlZeroMemory(&CreateAllocArgs, sizeof(CreateAllocArgs));
+    CreateAllocArgs.pPrivateDriverData = NULL;
+    CreateAllocArgs.PrivateDriverDataSize = 0;
+    CreateAllocArgs.NumAllocations = 1;
+    CreateAllocArgs.pAllocationInfo = &KernelAllocInfo;
+    CreateAllocArgs.hResource = NULL;
+    CreateAllocArgs.Flags.Value = 0;
+
+    Status = RxgkDriverExtension->DxgkDdiCreateAllocation(
+        RxgkDriverExtension->MiniportContext,
+        &CreateAllocArgs);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: DxgkDdiCreateAllocation -> 0x%08X\n", Status);
+        ExFreePoolWithTag(AllocPriv, 'wShS');
+        return Status;
+    }
+
+    /* Create a KMT handle for the shadow allocation */
+    D3DKMT_HANDLE ShadowKmtHandle = RxgkAllocKmtHandle();
+    
+    /* Register the allocation in our lookup table */
+    Status = RxgkKmtAllocationInsert(ShadowKmtHandle, KernelAllocInfo.hAllocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: Failed to register allocation: 0x%08X\n", Status);
+        /* Continue anyway */
+    }
+
+    /* Store allocation metadata for use during OpenAllocation.
+     * The metadata system makes a copy, so we can free AllocPriv after this.
+     */
+    Status = RxgkKmtAllocationMetadataInsert(
+        ShadowKmtHandle,
+        AllocPriv,
+        AllocPrivSize);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkShadowSurfaceCreate: Failed to store metadata: 0x%08X\n", Status);
+        ExFreePoolWithTag(AllocPriv, 'wShS');
+        /* Continue anyway - allocation was created successfully */
+    }
+    else
+    {
+        /* Metadata system made a copy, so we can free the original */
+        ExFreePoolWithTag(AllocPriv, 'wShS');
+    }
+
+    *phShadowAllocation = ShadowKmtHandle;
+
+    DPRINT1("RxgkShadowSurfaceCreate: Created shadow surface %ux%u fmt=%u hAlloc=%p (miniport=%p)\n",
+            Width, Height, (UINT)Format,
+            (PVOID)(ULONG_PTR)ShadowKmtHandle,
+            KernelAllocInfo.hAllocation);
+
+    return STATUS_SUCCESS;
+}
+
+/*
  * Converts D3DKMT_CREATEALLOCATION (user-mode style) to DXGKARG_CREATEALLOCATION
  * (kernel-mode DDI) and calls into the miniport's DxgkDdiCreateAllocation.
  *
@@ -426,8 +577,34 @@ RxgkWin32kCreateAllocation(
 
     /*
      * Copy back the allocation handle from kernel structure to user structure.
+     * The miniport returns its internal allocation handle, which we use as the KMT handle.
      */
     UserAllocInfo->hAllocation = (D3DKMT_HANDLE)(ULONG_PTR)KernelAllocInfo.hAllocation;
+
+    /*
+     * Register the allocation in our lookup table so DxgkCbGetHandleData can find it.
+     * This allows the miniport to look up allocations by handle during OpenAllocation.
+     */
+    Status = RxgkKmtAllocationInsert(UserAllocInfo->hAllocation, KernelAllocInfo.hAllocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkWin32kCreateAllocation: Failed to register allocation in lookup table: 0x%08X\n", Status);
+        /* Continue anyway - the allocation was created successfully */
+    }
+
+    /*
+     * Store allocation metadata (private driver data) for use during OpenAllocation.
+     * This is required by miniports like VBox that need the private data when opening allocations.
+     */
+    Status = RxgkKmtAllocationMetadataInsert(
+        UserAllocInfo->hAllocation,
+        UserAllocInfo->pPrivateDriverData,
+        UserAllocInfo->PrivateDriverDataSize);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkWin32kCreateAllocation: Failed to store allocation metadata: 0x%08X\n", Status);
+        /* Continue anyway - the allocation was created successfully */
+    }
 
     /*
      * If a resource was created, copy back the resource handle.
@@ -447,8 +624,9 @@ RxgkWin32kCreateAllocation(
         DPRINT1("RxgkWin32kCreateAllocation: CreateShared flag not fully implemented\n");
     }
 
-    DPRINT1("RxgkWin32kCreateAllocation: success, hAllocation=%p\n",
-            (PVOID)(ULONG_PTR)UserAllocInfo->hAllocation);
+    DPRINT1("RxgkWin32kCreateAllocation: success, hAllocation=%p (miniport=%p)\n",
+            (PVOID)(ULONG_PTR)UserAllocInfo->hAllocation,
+            KernelAllocInfo.hAllocation);
 
     return STATUS_SUCCESS;
 }
@@ -716,11 +894,24 @@ RxgkWin32kDestroyAllocation(
                 (PVOID)(ULONG_PTR)Args->hResource);
     }
 
+    // Remove allocations from our lookup tables
+    if (Args->AllocationCount > 0 && Args->phAllocationList)
+    {
+        for (UINT i = 0; i < Args->AllocationCount; ++i)
+        {
+            D3DKMT_HANDLE hAllocation = Args->phAllocationList[i];
+            if (hAllocation != 0)
+            {
+                RxgkKmtAllocationRemove(hAllocation);
+                RxgkKmtAllocationMetadataRemove(hAllocation);
+            }
+        }
+    }
+
     // For bring-up, we're using synthetic handles, so we just return success
     // In a full implementation, we would:
-    // 1. Look up each allocation handle
-    // 2. Call the miniport's DxgkDdiDestroyAllocation if needed
-    // 3. Free any associated resources
+    // 1. Call the miniport's DxgkDdiDestroyAllocation if needed
+    // 2. Free any associated resources
     DPRINT1("RxgkWin32kDestroyAllocation: Success (synthetic handles, no cleanup needed)\n");
     return STATUS_SUCCESS;
 }

@@ -165,7 +165,8 @@ CddPresent(_In_ DHPDEV dhpdev,
 
    Args.hContext = ppdev->hDxgContext;
    Args.VidPnSourceId = 0;
-   Args.hSource = ppdev->hPrimaryAllocation;
+   /* Use shadow allocation as source (where GDI draws) and primary as destination (screen) */
+   Args.hSource = (ppdev->hShadowAllocation != 0) ? ppdev->hShadowAllocation : ppdev->hPrimaryAllocation;
    Args.hDestination = ppdev->hPrimaryAllocation;
    Args.Color = 0;   /* Not used by our dxgkrnl present once wired to framebuffer */
    Args.Flags.Value = 0;
@@ -244,9 +245,21 @@ CddEnablePrimary(_Inout_ PCDDPDEV ppdev,
       return FALSE;
 
    ppdev->hPrimaryAllocation = EnableArgs.hPrimaryAllocation;
+   /* Shadow allocation is created by dxgkrnl in RxgkWin32kCddEnable */
+   ppdev->hShadowAllocation = EnableArgs.hShadowAllocation;
    *Width = EnableArgs.Width;
    *Height = EnableArgs.Height;
    *Pitch = EnableArgs.Pitch;
+
+   if (ppdev->hShadowAllocation != 0)
+   {
+      DPRINT1("CddEnablePrimary: Using shadow allocation hShadow=%p from dxgkrnl\n",
+              (PVOID)(ULONG_PTR)ppdev->hShadowAllocation);
+   }
+   else
+   {
+      DPRINT1("CddEnablePrimary: No shadow allocation available - will draw directly to primary\n");
+   }
 
    /* Derive bits-per-pixel from format; if unknown, fall back to pitch/width. */
    switch (EnableArgs.Format)
@@ -305,7 +318,8 @@ CddLockPrimary(_In_ PCDDPDEV ppdev, _Out_ PVOID* Bits)
 
    RtlZeroMemory(&LockArgs, sizeof(LockArgs));
    LockArgs.hDevice = 0;
-   LockArgs.hAllocation = ppdev->hPrimaryAllocation;
+   /* Lock shadow allocation if available, otherwise fall back to primary */
+   LockArgs.hAllocation = (ppdev->hShadowAllocation != 0) ? ppdev->hShadowAllocation : ppdev->hPrimaryAllocation;
    if (LockArgs.hAllocation == 0)
       return FALSE;
    {
@@ -342,7 +356,8 @@ CddUnlockPrimary(_Inout_ PCDDPDEV ppdev)
    if (!g_DxgkCallbacksValid || !g_DxgkCallbacks.RxgkIntPfnUnlock)
       return;
 
-   Alloc = ppdev->hPrimaryAllocation;
+   /* Unlock shadow allocation if available, otherwise primary */
+   Alloc = (ppdev->hShadowAllocation != 0) ? ppdev->hShadowAllocation : ppdev->hPrimaryAllocation;
    if (!Alloc)
       return;
 
@@ -860,6 +875,22 @@ DrvDisableSurface(
    {
       CddUnlockPrimary(ppdev);
       ppdev->ScreenPtr = NULL;
+   }
+   
+   /* Destroy shadow allocation if it was created */
+   if (ppdev->hShadowAllocation != 0 && g_DxgkCallbacksValid && g_DxgkCallbacks.RxgkIntPfnDestroyAllocation)
+   {
+      D3DKMT_DESTROYALLOCATION DestroyAllocArgs;
+      D3DKMT_HANDLE Alloc = ppdev->hShadowAllocation;
+      
+      RtlZeroMemory(&DestroyAllocArgs, sizeof(DestroyAllocArgs));
+      DestroyAllocArgs.hDevice = ppdev->hDxgDevice;  /* Use device handle if available */
+      DestroyAllocArgs.hResource = 0;
+      DestroyAllocArgs.AllocationCount = 1;
+      DestroyAllocArgs.phAllocationList = &Alloc;
+      
+      (void)g_DxgkCallbacks.RxgkIntPfnDestroyAllocation(&DestroyAllocArgs);
+      ppdev->hShadowAllocation = 0;
    }
 }
 

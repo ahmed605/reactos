@@ -213,11 +213,135 @@ NTSTATUS
     _In_ HANDLE hContext,
     _Inout_ PDXGKARG_PRESENT pPresent);
 
-/* Indices used by VBox present for pAllocationList */
-#define RXGK_PRESENT_SOURCE_INDEX      0
-#define RXGK_PRESENT_DESTINATION_INDEX 1
+/* Indices used by VBox present for pAllocationList
+ * These match Windows SDK definitions:
+ * DXGK_PRESENT_SOURCE_INDEX = 1
+ * DXGK_PRESENT_DESTINATION_INDEX = 2
+ */
+#define RXGK_PRESENT_SOURCE_INDEX      1
+#define RXGK_PRESENT_DESTINATION_INDEX 2
 
 #endif /* __RXGK_DXGK_PRESENT_DEFS__ */
+
+/*
+ * SubmitCommand DDI structures needed to submit DMA buffers after Present.
+ */
+#ifndef __RXGK_DXGK_SUBMITCOMMAND_DEFS__
+#define __RXGK_DXGK_SUBMITCOMMAND_DEFS__
+
+typedef struct _DXGK_SUBMITCOMMANDFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Paging : 1;
+            UINT Present : 1;
+            UINT RedirectedPresent : 1;
+            UINT NullRendering : 1;
+            UINT Flip : 1;
+            UINT FlipWithNoWait : 1;
+            UINT ContextSwitch : 1;
+            UINT Resubmission : 1;
+            UINT VirtualMachineData : 1;
+            UINT Reserved : 23;
+        };
+        UINT Value;
+    };
+} DXGK_SUBMITCOMMANDFLAGS, *PDXGK_SUBMITCOMMANDFLAGS;
+
+typedef struct _DXGKARG_SUBMITCOMMAND
+{
+    union
+    {
+        HANDLE hDevice;
+        HANDLE hContext;
+    };
+    UINT DmaBufferSegmentId;
+    PHYSICAL_ADDRESS DmaBufferPhysicalAddress;
+    UINT DmaBufferSize;
+    UINT DmaBufferSubmissionStartOffset;
+    UINT DmaBufferSubmissionEndOffset;
+    PVOID pDmaBufferPrivateData;
+    UINT DmaBufferPrivateDataSize;
+    UINT DmaBufferPrivateDataSubmissionStartOffset;
+    UINT DmaBufferPrivateDataSubmissionEndOffset;
+    UINT SubmissionFenceId;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    D3DDDI_FLIPINTERVAL_TYPE FlipInterval;
+    DXGK_SUBMITCOMMANDFLAGS Flags;
+    UINT EngineOrdinal;
+    D3DGPU_VIRTUAL_ADDRESS DmaBufferVirtualAddress;
+    UINT NodeOrdinal;
+} DXGKARG_SUBMITCOMMAND, *PDXGKARG_SUBMITCOMMAND;
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_SUBMITCOMMAND)(
+    _In_ HANDLE hAdapter,
+    _In_ CONST PDXGKARG_SUBMITCOMMAND pSubmitCommand);
+
+#endif /* __RXGK_DXGK_SUBMITCOMMAND_DEFS__ */
+
+/*
+ * Patch DDI structures needed for Vista (patches DMA buffer after Present).
+ */
+#ifndef __RXGK_DXGK_PATCH_DEFS__
+#define __RXGK_DXGK_PATCH_DEFS__
+
+typedef struct _DXGK_PATCHFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Paging : 1;
+            UINT Present : 1;
+            UINT RedirectedPresent : 1;
+            UINT NullRendering : 1;
+            UINT Reserved : 28;
+        };
+        UINT Value;
+    };
+} DXGK_PATCHFLAGS, *PDXGK_PATCHFLAGS;
+
+typedef struct _DXGKARG_PATCH
+{
+    union
+    {
+        HANDLE hDevice;
+        HANDLE hContext;
+    };
+    UINT DmaBufferSegmentId;
+    LARGE_INTEGER DmaBufferPhysicalAddress;
+    PVOID pDmaBuffer;
+    UINT DmaBufferSize;
+    UINT DmaBufferSubmissionStartOffset;
+    UINT DmaBufferSubmissionEndOffset;
+    PVOID pDmaBufferPrivateData;
+    UINT DmaBufferPrivateDataSize;
+    UINT DmaBufferPrivateDataSubmissionStartOffset;
+    UINT DmaBufferPrivateDataSubmissionEndOffset;
+    const DXGK_ALLOCATIONLIST* pAllocationList;
+    UINT AllocationListSize;
+    const D3DDDI_PATCHLOCATIONLIST* pPatchLocationList;
+    UINT PatchLocationListSize;
+    UINT PatchLocationListSubmissionStart;
+    UINT PatchLocationListSubmissionLength;
+    UINT SubmissionFenceId;
+    DXGK_PATCHFLAGS Flags;
+    UINT EngineOrdinal;
+} DXGKARG_PATCH, *PDXGKARG_PATCH;
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_PATCH)(
+    _In_ HANDLE hContext,
+    _Inout_ PDXGKARG_PATCH pPatch);
+
+#endif /* __RXGK_DXGK_PATCH_DEFS__ */
 
 /*
  * Minimal Vista-compatible OpenAllocation DDI payloads needed by VBox:
@@ -268,6 +392,19 @@ NTSTATUS
     _In_ HANDLE hDevice,
     _In_ const DXGKARG_OPENALLOCATION* pOpenAllocation);
 
+typedef struct _DXGKARG_CLOSEALLOCATION
+{
+    UINT NumAllocations;
+    CONST HANDLE* pOpenHandleList; /* in: hDeviceSpecificAllocation list */
+} DXGKARG_CLOSEALLOCATION, *PDXGKARG_CLOSEALLOCATION;
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_CLOSEALLOCATION)(
+    _In_ HANDLE hDevice,
+    _In_ const DXGKARG_CLOSEALLOCATION* pCloseAllocation);
+
 #endif /* __RXGK_DXGK_OPENALLOCATION_DEFS__ */
 
 typedef
@@ -302,6 +439,15 @@ NTAPI
 RxgkSharedPrimaryGetAllocationPrivateData(
     _Out_ PVOID* ppData,
     _Out_ UINT* pSize);
+
+NTSTATUS
+NTAPI
+RxgkShadowSurfaceCreate(
+    _In_ UINT Width,
+    _In_ UINT Height,
+    _In_ D3DDDIFORMAT Format,
+    _In_ UINT Pitch,
+    _Out_ D3DKMT_HANDLE* phShadowAllocation);
 
 // Forward declaration for D3DKMT_DISPLAYMODE (defined in d3dkmthk.h, which has user-mode dependencies)
 // The full definition is included in implementation files that need it
@@ -357,8 +503,11 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PRXGKDDI_DESTROYDEVICE                   DxgkDdiDestroyDevice;
     PDXGKDDI_CREATEALLOCATION                DxgkDdiCreateAllocation;
     PRXGKDDI_OPENALLOCATION                  DxgkDdiOpenAllocation;
+    PRXGKDDI_CLOSEALLOCATION                 DxgkDdiCloseAllocation;
     PRXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA DxgkDdiGetStandardAllocationDriverData;
     PRXGKDDI_PRESENT                         DxgkDdiPresent;
+    PRXGKDDI_PATCH                           DxgkDdiPatch;
+    PRXGKDDI_SUBMITCOMMAND                   DxgkDdiSubmitCommand;
     PRXGKDDI_CREATECONTEXT                   DxgkDdiCreateContext;
     PRXGKDDI_DESTROYCONTEXT                  DxgkDdiDestroyContext;
     // BUS

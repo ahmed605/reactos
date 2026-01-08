@@ -28,6 +28,8 @@ static KSPIN_LOCK g_RxgkKmtAllocationLock;
 static LIST_ENTRY g_RxgkKmtAllocationList;
 static KSPIN_LOCK g_RxgkKmtDeviceDpcLock;
 static LIST_ENTRY g_RxgkKmtDeviceDpcList;
+static KSPIN_LOCK g_RxgkKmtAllocationMetadataLock;
+static LIST_ENTRY g_RxgkKmtAllocationMetadataList;
 static volatile LONG g_RxgkKmtHandleCounter = 0x2000;
 static BOOLEAN g_RxgkKmtInitDone = FALSE;
 
@@ -48,6 +50,8 @@ RxgkKmtInitOnce(VOID)
     InitializeListHead(&g_RxgkKmtAllocationList);
     KeInitializeSpinLock(&g_RxgkKmtDeviceDpcLock);
     InitializeListHead(&g_RxgkKmtDeviceDpcList);
+    KeInitializeSpinLock(&g_RxgkKmtAllocationMetadataLock);
+    InitializeListHead(&g_RxgkKmtAllocationMetadataList);
     g_RxgkKmtInitDone = TRUE;
 }
 
@@ -556,6 +560,151 @@ RxgkKmtDeviceDpcRemove(_In_ HANDLE MiniportDevice)
         }
     }
     KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+}
+
+typedef struct _RXGK_KMT_ALLOCATION_METADATA_ENTRY
+{
+    LIST_ENTRY Link;
+    D3DKMT_HANDLE KmtAllocation;
+    PVOID pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+} RXGK_KMT_ALLOCATION_METADATA_ENTRY, *PRXGK_KMT_ALLOCATION_METADATA_ENTRY;
+
+NTSTATUS
+NTAPI
+RxgkKmtAllocationMetadataInsert(
+    _In_ D3DKMT_HANDLE KmtAllocation,
+    _In_opt_ PVOID pPrivateDriverData,
+    _In_ UINT PrivateDriverDataSize)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_ALLOCATION_METADATA_ENTRY Metadata;
+    PVOID CopiedData = NULL;
+
+    if (KmtAllocation == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    RxgkKmtInitOnce();
+
+    /* Check if metadata already exists */
+    KeAcquireSpinLock(&g_RxgkKmtAllocationMetadataLock, &OldIrql);
+    for (Entry = g_RxgkKmtAllocationMetadataList.Flink; Entry != &g_RxgkKmtAllocationMetadataList; Entry = Entry->Flink)
+    {
+        Metadata = CONTAINING_RECORD(Entry, RXGK_KMT_ALLOCATION_METADATA_ENTRY, Link);
+        if (Metadata->KmtAllocation == KmtAllocation)
+        {
+            KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
+
+    /* Allocate metadata entry */
+    Metadata = (PRXGK_KMT_ALLOCATION_METADATA_ENTRY)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(*Metadata), RXGK_KMT_TAG);
+    if (!Metadata)
+        return STATUS_NO_MEMORY;
+
+    RtlZeroMemory(Metadata, sizeof(*Metadata));
+    Metadata->KmtAllocation = KmtAllocation;
+
+    /* Copy private driver data if provided */
+    if (pPrivateDriverData && PrivateDriverDataSize > 0)
+    {
+        CopiedData = ExAllocatePoolWithTag(NonPagedPool, PrivateDriverDataSize, RXGK_KMT_TAG);
+        if (!CopiedData)
+        {
+            ExFreePoolWithTag(Metadata, RXGK_KMT_TAG);
+            return STATUS_NO_MEMORY;
+        }
+
+        RtlCopyMemory(CopiedData, pPrivateDriverData, PrivateDriverDataSize);
+        Metadata->pPrivateDriverData = CopiedData;
+        Metadata->PrivateDriverDataSize = PrivateDriverDataSize;
+    }
+    else
+    {
+        Metadata->pPrivateDriverData = NULL;
+        Metadata->PrivateDriverDataSize = 0;
+    }
+
+    /* Insert into list */
+    KeAcquireSpinLock(&g_RxgkKmtAllocationMetadataLock, &OldIrql);
+    InsertTailList(&g_RxgkKmtAllocationMetadataList, &Metadata->Link);
+    KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RxgkKmtAllocationMetadataQuery(
+    _In_ D3DKMT_HANDLE KmtAllocation,
+    _Out_opt_ PVOID* ppPrivateDriverData,
+    _Out_opt_ PUINT pPrivateDriverDataSize)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_ALLOCATION_METADATA_ENTRY Metadata;
+    NTSTATUS Status = STATUS_NOT_FOUND;
+
+    if (KmtAllocation == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    RxgkKmtInitOnce();
+
+    KeAcquireSpinLock(&g_RxgkKmtAllocationMetadataLock, &OldIrql);
+    for (Entry = g_RxgkKmtAllocationMetadataList.Flink; Entry != &g_RxgkKmtAllocationMetadataList; Entry = Entry->Flink)
+    {
+        Metadata = CONTAINING_RECORD(Entry, RXGK_KMT_ALLOCATION_METADATA_ENTRY, Link);
+        if (Metadata->KmtAllocation == KmtAllocation)
+        {
+            if (ppPrivateDriverData)
+                *ppPrivateDriverData = Metadata->pPrivateDriverData;
+            if (pPrivateDriverDataSize)
+                *pPrivateDriverDataSize = Metadata->PrivateDriverDataSize;
+            Status = STATUS_SUCCESS;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
+
+    return Status;
+}
+
+VOID
+NTAPI
+RxgkKmtAllocationMetadataRemove(_In_ D3DKMT_HANDLE KmtAllocation)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_ALLOCATION_METADATA_ENTRY Metadata;
+
+    if (KmtAllocation == 0)
+        return;
+
+    RxgkKmtInitOnce();
+
+    KeAcquireSpinLock(&g_RxgkKmtAllocationMetadataLock, &OldIrql);
+    Entry = g_RxgkKmtAllocationMetadataList.Flink;
+    while (Entry != &g_RxgkKmtAllocationMetadataList)
+    {
+        Metadata = CONTAINING_RECORD(Entry, RXGK_KMT_ALLOCATION_METADATA_ENTRY, Link);
+        Entry = Entry->Flink;
+        if (Metadata->KmtAllocation == KmtAllocation)
+        {
+            RemoveEntryList(&Metadata->Link);
+            KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
+            
+            /* Free private driver data if it was allocated */
+            if (Metadata->pPrivateDriverData)
+                ExFreePoolWithTag(Metadata->pPrivateDriverData, RXGK_KMT_TAG);
+            ExFreePoolWithTag(Metadata, RXGK_KMT_TAG);
+            return;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtAllocationMetadataLock, OldIrql);
 }
 
 

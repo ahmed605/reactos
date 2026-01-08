@@ -95,6 +95,26 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
         (PRXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA)DriverInitData->DxgkDdiGetStandardAllocationDriverData;
     RxgkDriverExtension->DxgkDdiPresent =
         (PRXGKDDI_PRESENT)DriverInitData->DxgkDdiPresent;
+    /* DxgkDdiPatch is Vista+ and required for Present to work - register if provided */
+    if (DriverInitData->DxgkDdiPatch)
+    {
+        RxgkDriverExtension->DxgkDdiPatch =
+            (PRXGKDDI_PATCH)DriverInitData->DxgkDdiPatch;
+    }
+    else
+    {
+        RxgkDriverExtension->DxgkDdiPatch = NULL;
+    }
+    /* DxgkDdiSubmitCommand is Win10+ and optional - only register if provided by miniport */
+    if (DriverInitData->DxgkDdiSubmitCommand)
+    {
+        RxgkDriverExtension->DxgkDdiSubmitCommand =
+            (PRXGKDDI_SUBMITCOMMAND)DriverInitData->DxgkDdiSubmitCommand;
+    }
+    else
+    {
+        RxgkDriverExtension->DxgkDdiSubmitCommand = NULL;
+    }
     RxgkDriverExtension->DxgkDdiCreateContext = (PRXGKDDI_CREATECONTEXT)DriverInitData->DxgkDdiCreateContext;
     RxgkDriverExtension->DxgkDdiDestroyContext = (PRXGKDDI_DESTROYCONTEXT)DriverInitData->DxgkDdiDestroyContext;
 
