@@ -10,6 +10,39 @@
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 DXGKRNL_INTERFACE DxgkrnlInterface;
 
+/* Wrapper DPC routine that calls the miniport's DPC routine.
+ * DeferredContext contains the miniport device context (handle returned from DxgkDdiCreateDevice).
+ */
+VOID
+NTAPI
+RxgkMiniportDpcRoutine(
+    _In_ struct _KDPC *Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* DeferredContext is the miniport device context (handle from DxgkDdiCreateDevice) */
+    if (!DeferredContext)
+    {
+        DPRINT1("RxgkMiniportDpcRoutine: NULL miniport device context\n");
+        return;
+    }
+
+    /* Call the miniport's DPC routine if it's registered */
+    if (RxgkDriverExtension && RxgkDriverExtension->DxgkDdiDpcRoutine)
+    {
+        RxgkDriverExtension->DxgkDdiDpcRoutine(DeferredContext);
+    }
+    else
+    {
+        DPRINT1("RxgkMiniportDpcRoutine: Miniport DPC routine not available\n");
+    }
+}
+
 /* Recent successful small MMIO mappings (used to infer missing BAR bases during bring-up). */
 static ULONGLONG g_RxgkRecentMapPhys[8] = {0};
 static volatile LONG g_RxgkRecentMapIndex = 0;
@@ -1493,9 +1526,72 @@ BOOLEAN
 APIENTRY
 RxgkCbQueueDpc(_In_ HANDLE DeviceHandle)
 {
-    UNIMPLEMENTED;
-    __debugbreak();
-    return FALSE;
+    PKDPC DeviceDpc;
+
+    if (!DeviceHandle)
+    {
+        DPRINT1("RxgkCbQueueDpc: Invalid device handle\n");
+        return FALSE;
+    }
+
+    /* First, try to look up a per-device DPC. */
+    DeviceDpc = RxgkKmtDeviceDpcLookup(DeviceHandle);
+    
+    /* If not found, check if this is the adapter-level handle.
+     * In Windows, DxgkCbQueueDpc receives the DeviceHandle from DXGKRNL_INTERFACE,
+     * which is set to the DriverObject. The miniport may also pass:
+     * 1. The DriverObject (from DXGKRNL_INTERFACE.DeviceHandle) - most common
+     * 2. The MiniportContext (adapter context)
+     * 3. A device object pointer (MiniportFdo or MiniportPdo)
+     * 4. Some other adapter-related handle
+     * In all these cases, we should use the adapter-level DPC. */
+    if (!DeviceDpc && RxgkDriverExtension)
+    {
+        PDRIVER_OBJECT MiniportDriverObject = RxgkDriverExtension->MiniportDriverObject;
+        PVOID MiniportContext = RxgkDriverExtension->MiniportContext;
+        PDEVICE_OBJECT MiniportFdo = RxgkDriverExtension->MiniportFdo;
+        PDEVICE_OBJECT MiniportPdo = RxgkDriverExtension->MiniportPdo;
+        
+        /* Check if it's the DriverObject (adapter-level handle from DXGKRNL_INTERFACE) */
+        if (DeviceHandle == (HANDLE)MiniportDriverObject)
+        {
+            DeviceDpc = &RxgkDriverExtension->DpcObject;
+            DPRINT1("RxgkCbQueueDpc: Using adapter-level DPC (DriverObject handle)\n");
+        }
+        /* Check if it's the MiniportContext (adapter context) */
+        else if (DeviceHandle == (HANDLE)MiniportContext)
+        {
+            DeviceDpc = &RxgkDriverExtension->DpcObject;
+            DPRINT1("RxgkCbQueueDpc: Using adapter-level DPC (MiniportContext handle)\n");
+        }
+        /* Check if it's a device object pointer */
+        else if (DeviceHandle == (HANDLE)MiniportFdo || DeviceHandle == (HANDLE)MiniportPdo)
+        {
+            DeviceDpc = &RxgkDriverExtension->DpcObject;
+            DPRINT1("RxgkCbQueueDpc: Using adapter-level DPC (device object handle %p)\n", DeviceHandle);
+        }
+        /* For bring-up: if we can't find a per-device DPC and the handle doesn't match
+         * known adapter handles, fall back to adapter-level DPC. This handles cases
+         * where the miniport uses a different handle representation. */
+        else
+        {
+            /* Use adapter-level DPC as fallback - the miniport's DPC routine
+             * will receive the MiniportContext and can handle device-specific logic. */
+            DeviceDpc = &RxgkDriverExtension->DpcObject;
+            DPRINT1("RxgkCbQueueDpc: Using adapter-level DPC (fallback for handle %p)\n", DeviceHandle);
+        }
+    }
+
+    if (!DeviceDpc)
+    {
+        DPRINT1("RxgkCbQueueDpc: No DPC found for device handle %p\n", DeviceHandle);
+        return FALSE;
+    }
+
+    /* Queue the DPC. */
+    KeInsertQueueDpc(DeviceDpc, NULL, NULL);
+
+    return TRUE;
 }
 
 NTSTATUS
@@ -1573,7 +1669,45 @@ APIENTRY
 CALLBACK
 RxgkCbNotifyDpc(_In_ const HANDLE hAdapter)
 {
-    DPRINT("WARNING!!! Scheduler is UNIMPLEMENTED: Event DxgkCbNotifyDpc detected\n");
+    /* DxgkCbNotifyDpc is called by the miniport to notify the scheduler that a DPC should be processed.
+     * According to Windows reference code (DxgNotifyDpcCB):
+     * - Must be called at DISPATCH_LEVEL (IRQL == 2)
+     * - Calls the scheduler's pfnVidSchDdiNotifyDpc, which handles whether to queue a DPC
+     * - Does NOT directly queue a DPC itself
+     * 
+     * Since we don't have a full scheduler implementation, we implement a simple version:
+     * - If we're at DISPATCH_LEVEL and a work item is already queued, skip (scheduler already notified)
+     * - Otherwise, queue the DPC which will queue the work item to process pending work
+     */
+    if (!hAdapter || !RxgkDriverExtension)
+    {
+        if (!hAdapter)
+            DPRINT1("RxgkCbNotifyDpc: NULL adapter handle\n");
+        return;
+    }
+
+    /* Windows reference code asserts IRQL == DISPATCH_LEVEL (2) */
+    KIRQL CurrentIrql = KeGetCurrentIrql();
+    if (CurrentIrql != DISPATCH_LEVEL)
+    {
+        DPRINT1("RxgkCbNotifyDpc: Called at IRQL %lu, expected DISPATCH_LEVEL (2)\n", CurrentIrql);
+        /* Continue anyway for bring-up */
+    }
+
+    /* Check if work item is already queued.
+     * Use InterlockedExchangeAdd with 0 to atomically read the value without changing it.
+     */
+    LONG Queued = InterlockedExchangeAdd(&RxgkDriverExtension->DpcWorkItemQueued, 0);
+    if (Queued == 1)
+    {
+        /* Work item already queued - scheduler already notified, skip */
+        return;
+    }
+
+    /* Work item not queued, queue the DPC which will queue the work item.
+     * This matches Windows behavior where the scheduler would queue a DPC if needed.
+     */
+    RxgkCbQueueDpc(hAdapter);
 }
 
 VOID

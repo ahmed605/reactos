@@ -99,6 +99,10 @@ RxgkWin32kEscape(_In_ const D3DKMT_ESCAPE* Args)
      * Vista/Windows semantics: the kernel copies the private driver data to a
      * kernel buffer before calling the miniport, then copies it back.
      * Do NOT pass a user-mode pointer directly to the miniport.
+     * 
+     * Reference: Windows uses PagedPool for escape buffers since DxgkDdiEscape
+     * is called at PASSIVE_LEVEL. The miniport should not create MDLs from
+     * this buffer - it should use it directly.
      */
     if (Args->PrivateDriverDataSize > 0)
     {
@@ -117,7 +121,8 @@ RxgkWin32kEscape(_In_ const D3DKMT_ESCAPE* Args)
             _SEH2_END;
         }
 
-        /* Reference uses a small on-stack buffer for <= 0x200, otherwise PagedPool. */
+        /* Use PagedPool since DxgkDdiEscape is called at PASSIVE_LEVEL.
+         * Reference: Windows uses PagedPool for escape buffers. */
         if (Args->PrivateDriverDataSize <= sizeof(StackPrivate))
         {
             KmPrivate = StackPrivate;

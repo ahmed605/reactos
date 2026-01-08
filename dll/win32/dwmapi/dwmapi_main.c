@@ -336,3 +336,36 @@ HRESULT WINAPI DwmpGetColorizationParameters(void *params)
     FIXME("(%p) stub\n", params);
     return E_NOTIMPL;
 }
+
+/**********************************************************************
+ *           DwmpDxGetWindowSharedSurface         (DWMAPI.100)
+ */
+HRESULT WINAPI DwmpDxGetWindowSharedSurface(
+    HWND hwnd,
+    DWORD param2,
+    DWORD param3,
+    BOOL param4,
+    DWORD *out1,
+    HANDLE *out2,
+    DWORD *out3)
+{
+    static BOOL once;
+    
+    if (!once++)
+    {
+        FIXME("(%p, %lu, %lu, %d, %p, %p, %p) stub\n",
+              hwnd, param2, param3, param4, out1, out2, out3);
+    }
+
+    /* Initialize output parameters to safe values */
+    if (out1)
+        *out1 = 0;
+    if (out2)
+        *out2 = NULL;
+    if (out3)
+        *out3 = 0;
+
+    /* Return composition disabled error - this allows DXGI to fall back
+     * to non-DWM rendering paths */
+    return DWM_E_COMPOSITIONDISABLED;
+}

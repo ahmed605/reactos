@@ -64,6 +64,10 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
     RxgkDriverExtension->pDesiredMode = NULL;
     RxgkDriverExtension->DesiredModeValid = FALSE;
     KeInitializeSpinLock(&RxgkDriverExtension->DesiredModeLock);
+    
+    // Initialize DPC work item to NULL (allocated during StartAdapter)
+    RxgkDriverExtension->DpcWorkItem = NULL;
+    RxgkDriverExtension->DpcWorkItemQueued = 0; /* FALSE */
  
     RxgkDriverExtension->Version = DriverInitData->Version;
     RxgkDriverExtension->DxgkDdiAddDevice = DriverInitData->DxgkDdiAddDevice;

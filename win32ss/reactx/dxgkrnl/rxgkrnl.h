@@ -325,6 +325,8 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     ULONG SystemIoBusNumber; // ACPI or PCI Currently
     ULONG SystemIoSlotNumber; // ACPI or PCI Currently
     KDPC DpcObject;
+    PIO_WORKITEM DpcWorkItem; /* Work item to defer miniport DPC to PASSIVE_LEVEL */
+    LONG DpcWorkItemQueued; /* Flag to track if work item is already queued (0=FALSE, 1=TRUE, for InterlockedCompareExchange) */
 
     /*
      * PnP-provided translated resources captured at IRP_MN_START_DEVICE.

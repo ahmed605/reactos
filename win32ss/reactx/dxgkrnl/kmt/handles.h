@@ -66,4 +66,17 @@ VOID
 NTAPI
 RxgkKmtAllocationRemove(_In_ D3DKMT_HANDLE KmtAllocation);
 
+/* Device DPC table (miniport device handle -> DPC object). */
+NTSTATUS
+NTAPI
+RxgkKmtDeviceDpcInsert(_In_ HANDLE MiniportDevice, _In_ PKDPC Dpc);
+
+PKDPC
+NTAPI
+RxgkKmtDeviceDpcLookup(_In_ HANDLE MiniportDevice);
+
+VOID
+NTAPI
+RxgkKmtDeviceDpcRemove(_In_ HANDLE MiniportDevice);
+
 

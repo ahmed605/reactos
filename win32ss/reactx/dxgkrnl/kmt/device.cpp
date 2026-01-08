@@ -81,6 +81,39 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
         return Status;
     }
 
+    /* Create and register a DPC for this device. */
+    {
+        PKDPC DeviceDpc = (PKDPC)ExAllocatePoolWithTag(NonPagedPool, sizeof(KDPC), 'tKgR');
+        if (!DeviceDpc)
+        {
+            DPRINT1("RxgkWin32kCreateDevice: Failed to allocate DPC\n");
+            RxgkKmtDeviceRemove(KmtDevice);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        /* Initialize the DPC with a wrapper routine that calls the miniport's DPC routine.
+         * DeferredContext is set to the miniport device handle so the wrapper can call
+         * the miniport's DxgkDdiDpcRoutine with the correct context. */
+        extern VOID NTAPI RxgkMiniportDpcRoutine(
+            _In_ struct _KDPC *Dpc,
+            _In_opt_ PVOID DeferredContext,
+            _In_opt_ PVOID SystemArgument1,
+            _In_opt_ PVOID SystemArgument2);
+        /* Pass the miniport device handle as DeferredContext so the wrapper
+         * can call the miniport's DPC routine with the correct context */
+        KeInitializeDpc(DeviceDpc, RxgkMiniportDpcRoutine, CreateDeviceArgs.hDevice);
+
+        /* Store the DPC in the mapping. */
+        Status = RxgkKmtDeviceDpcInsert(CreateDeviceArgs.hDevice, DeviceDpc);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RxgkWin32kCreateDevice: RxgkKmtDeviceDpcInsert failed 0x%08X\n", Status);
+            ExFreePoolWithTag(DeviceDpc, 'tKgR');
+            RxgkKmtDeviceRemove(KmtDevice);
+            return Status;
+        }
+    }
+
     /* Return opaque KMT handle to caller. */
     Args->hDevice = KmtDevice;
     
@@ -132,6 +165,16 @@ RxgkWin32kDestroyDevice(_In_ const D3DKMT_DESTROYDEVICE* Args)
     MiniportDevice = RxgkKmtDeviceLookup(Args->hDevice);
     if (!MiniportDevice)
         return STATUS_INVALID_HANDLE;
+
+    /* Remove DPC mapping and free the DPC. */
+    {
+        PKDPC DeviceDpc = RxgkKmtDeviceDpcLookup(MiniportDevice);
+        if (DeviceDpc)
+        {
+            RxgkKmtDeviceDpcRemove(MiniportDevice);
+            ExFreePoolWithTag(DeviceDpc, 'tKgR');
+        }
+    }
 
     /* Remove mapping first so stale handles fail fast if reused. */
     RxgkKmtDeviceRemove(Args->hDevice);

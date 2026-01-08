@@ -26,6 +26,8 @@ static KSPIN_LOCK g_RxgkKmtContextDeviceLock;
 static LIST_ENTRY g_RxgkKmtContextDeviceList;
 static KSPIN_LOCK g_RxgkKmtAllocationLock;
 static LIST_ENTRY g_RxgkKmtAllocationList;
+static KSPIN_LOCK g_RxgkKmtDeviceDpcLock;
+static LIST_ENTRY g_RxgkKmtDeviceDpcList;
 static volatile LONG g_RxgkKmtHandleCounter = 0x2000;
 static BOOLEAN g_RxgkKmtInitDone = FALSE;
 
@@ -44,6 +46,8 @@ RxgkKmtInitOnce(VOID)
     InitializeListHead(&g_RxgkKmtContextDeviceList);
     KeInitializeSpinLock(&g_RxgkKmtAllocationLock);
     InitializeListHead(&g_RxgkKmtAllocationList);
+    KeInitializeSpinLock(&g_RxgkKmtDeviceDpcLock);
+    InitializeListHead(&g_RxgkKmtDeviceDpcList);
     g_RxgkKmtInitDone = TRUE;
 }
 
@@ -447,6 +451,111 @@ RxgkKmtAllocationRemove(_In_ D3DKMT_HANDLE KmtAllocation)
         }
     }
     KeReleaseSpinLock(&g_RxgkKmtAllocationLock, OldIrql);
+}
+
+typedef struct _RXGK_KMT_DEVICE_DPC_ENTRY
+{
+    LIST_ENTRY Link;
+    HANDLE MiniportDevice;
+    PKDPC Dpc;
+} RXGK_KMT_DEVICE_DPC_ENTRY, *PRXGK_KMT_DEVICE_DPC_ENTRY;
+
+NTSTATUS
+NTAPI
+RxgkKmtDeviceDpcInsert(_In_ HANDLE MiniportDevice, _In_ PKDPC Dpc)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_DEVICE_DPC_ENTRY Map;
+
+    if (MiniportDevice == NULL || Dpc == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RxgkKmtInitOnce();
+
+    KeAcquireSpinLock(&g_RxgkKmtDeviceDpcLock, &OldIrql);
+    for (Entry = g_RxgkKmtDeviceDpcList.Flink; Entry != &g_RxgkKmtDeviceDpcList; Entry = Entry->Flink)
+    {
+        Map = CONTAINING_RECORD(Entry, RXGK_KMT_DEVICE_DPC_ENTRY, Link);
+        if (Map->MiniportDevice == MiniportDevice)
+        {
+            KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+
+    Map = (PRXGK_KMT_DEVICE_DPC_ENTRY)ExAllocatePoolWithTag(NonPagedPool, sizeof(*Map), RXGK_KMT_TAG);
+    if (!Map)
+        return STATUS_NO_MEMORY;
+
+    Map->MiniportDevice = MiniportDevice;
+    Map->Dpc = Dpc;
+
+    KeAcquireSpinLock(&g_RxgkKmtDeviceDpcLock, &OldIrql);
+    InsertTailList(&g_RxgkKmtDeviceDpcList, &Map->Link);
+    KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+
+    return STATUS_SUCCESS;
+}
+
+PKDPC
+NTAPI
+RxgkKmtDeviceDpcLookup(_In_ HANDLE MiniportDevice)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_DEVICE_DPC_ENTRY Map;
+    PKDPC Value = NULL;
+
+    if (MiniportDevice == NULL)
+        return NULL;
+
+    RxgkKmtInitOnce();
+
+    KeAcquireSpinLock(&g_RxgkKmtDeviceDpcLock, &OldIrql);
+    for (Entry = g_RxgkKmtDeviceDpcList.Flink; Entry != &g_RxgkKmtDeviceDpcList; Entry = Entry->Flink)
+    {
+        Map = CONTAINING_RECORD(Entry, RXGK_KMT_DEVICE_DPC_ENTRY, Link);
+        if (Map->MiniportDevice == MiniportDevice)
+        {
+            Value = Map->Dpc;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+
+    return Value;
+}
+
+VOID
+NTAPI
+RxgkKmtDeviceDpcRemove(_In_ HANDLE MiniportDevice)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PRXGK_KMT_DEVICE_DPC_ENTRY Map;
+
+    if (MiniportDevice == NULL)
+        return;
+
+    RxgkKmtInitOnce();
+
+    KeAcquireSpinLock(&g_RxgkKmtDeviceDpcLock, &OldIrql);
+    Entry = g_RxgkKmtDeviceDpcList.Flink;
+    while (Entry != &g_RxgkKmtDeviceDpcList)
+    {
+        Map = CONTAINING_RECORD(Entry, RXGK_KMT_DEVICE_DPC_ENTRY, Link);
+        Entry = Entry->Flink;
+        if (Map->MiniportDevice == MiniportDevice)
+        {
+            RemoveEntryList(&Map->Link);
+            KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
+            ExFreePoolWithTag(Map, RXGK_KMT_TAG);
+            return;
+        }
+    }
+    KeReleaseSpinLock(&g_RxgkKmtDeviceDpcLock, OldIrql);
 }
 
 

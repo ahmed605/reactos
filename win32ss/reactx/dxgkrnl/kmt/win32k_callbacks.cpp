@@ -741,6 +741,7 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             ExFreePoolWithTag(DstSubs, 'sRdP');
+            __debugbreak();
             return STATUS_ACCESS_VIOLATION;
         }
         _SEH2_END;
@@ -877,8 +878,54 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     }
     _SEH2_END;
 
+    /* Validate OpenDeviceSpecific before using it. */
+    if (OpenDeviceSpecific == NULL)
+    {
+        DPRINT1("RxgkWin32kPresent: OpenDeviceSpecific is NULL after DxgkDdiOpenAllocation\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Initialize allocation list entries. */
+    RtlZeroMemory(&AllocList[RXGK_PRESENT_SOURCE_INDEX], sizeof(DXGK_ALLOCATIONLIST));
+    RtlZeroMemory(&AllocList[RXGK_PRESENT_DESTINATION_INDEX], sizeof(DXGK_ALLOCATIONLIST));
     AllocList[RXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = OpenDeviceSpecific;
     AllocList[RXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = OpenDeviceSpecific;
+    /* SegmentId and PhysicalAddress remain 0 (zeroed above) as per bring-up comment below. */
+    
+    /* Validate OpenDeviceSpecific structure before passing to miniport */
+    _SEH2_TRY
+    {
+        PRXGK_VBOXWDDM_OPENALLOCATION_MIN Oa = (PRXGK_VBOXWDDM_OPENALLOCATION_MIN)OpenDeviceSpecific;
+        if (Oa->pDevice == NULL || Oa->pAllocation == NULL)
+        {
+            DPRINT1("RxgkWin32kPresent: OpenDeviceSpecific has NULL pDevice or pAllocation\n");
+            if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+            if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+            if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+            if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+            if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+            if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT1("RxgkWin32kPresent: Exception validating OpenDeviceSpecific structure\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        return STATUS_INVALID_PARAMETER;
+    }
+    _SEH2_END;
 
     /*
      * IMPORTANT (bring-up):
@@ -943,6 +990,14 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
     if (SubCnt == 1 && (Args->SubRectCnt == 0 || !Args->pSrcSubRects) && DstSubs)
         DstSubs[0] = PresentArgs->DstRect;
 
+    /* Initialize DMA buffer segment/address fields (zeroed by RtlZeroMemory, but be explicit). */
+    PresentArgs->DmaBufferSegmentId = 0;
+    PresentArgs->DmaBufferPhysicalAddress.QuadPart = 0;
+    PresentArgs->DmaBufferGpuVirtualAddress = 0;
+    PresentArgs->Reserved = 0;
+    PresentArgs->PrivateDriverDataSize = 0;
+    PresentArgs->pPrivateDriverData = NULL;
+
     DPRINT("RxgkWin32kPresent: PresentArgs: SubRectCnt=%u pDstSubRects=%p pAllocList=%p A0=%p A1=%p\n",
             (UINT)PresentArgs->SubRectCnt,
             (PVOID)(ULONG_PTR)PresentArgs->pDstSubRects,
@@ -957,7 +1012,32 @@ RxgkWin32kPresent(_In_ D3DKMT_PRESENT* Args)
             PatchOutCount,
             (PVOID)(ULONG_PTR)DmaBuf, (UINT)DmaSize,
             (PVOID)(ULONG_PTR)PrivBuf, (UINT)PrivSize);
-    Status = RxgkDriverExtension->DxgkDdiPresent(MiniportContext, PresentArgs);
+
+    /* Validate critical pointers before calling miniport. */
+    if (!MiniportContext || !PresentArgs || !AllocList || !DmaBuf || !PrivBuf || !PatchOut)
+    {
+        DPRINT1("RxgkWin32kPresent: Invalid parameters before DxgkDdiPresent call\n");
+        if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
+        if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');
+        if (AllocList) ExFreePoolWithTag(AllocList, 'lPdP');
+        if (DmaBuf) ExFreePoolWithTag(DmaBuf, 'bMdP');
+        if (PrivBuf) ExFreePoolWithTag(PrivBuf, 'pMdP');
+        if (PatchOut) ExFreePoolWithTag(PatchOut, 'pPtP');
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Wrap miniport call in SEH to catch any access violations. */
+    _SEH2_TRY
+    {
+        Status = RxgkDriverExtension->DxgkDdiPresent(MiniportContext, PresentArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT1("RxgkWin32kPresent: Exception in DxgkDdiPresent: Code=0x%08X\n",
+                _SEH2_GetExceptionCode());
+        Status = STATUS_ACCESS_VIOLATION;
+    }
+    _SEH2_END;
 
     if (DstSubs) ExFreePoolWithTag(DstSubs, 'sRdP');
     if (PresentArgs) ExFreePoolWithTag(PresentArgs, 'rPdP');

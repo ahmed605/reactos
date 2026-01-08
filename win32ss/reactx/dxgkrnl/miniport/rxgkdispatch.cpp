@@ -663,6 +663,52 @@ RxgkStartAdapter()
     }
 }
 
+/* Worker routine that calls the miniport's DPC routine at PASSIVE_LEVEL */
+VOID
+NTAPI
+IntVideoPortDpcWorker(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    
+    PRXGK_PRIVATE_EXTENSION RxgkExt = (PRXGK_PRIVATE_EXTENSION)Context;
+    if (!RxgkExt)
+    {
+        DPRINT1("IntVideoPortDpcWorker: NULL Context\n");
+        return;
+    }
+
+    /* MiniportContext is the adapter context passed to DxgkDdiStartDevice */
+    PVOID MiniportContext = RxgkExt->MiniportContext;
+    if (!MiniportContext)
+    {
+        DPRINT1("IntVideoPortDpcWorker: NULL MiniportContext\n");
+        return;
+    }
+
+    if (RxgkDriverExtension && RxgkDriverExtension->DxgkDdiDpcRoutine)
+    {
+        /* DxgkDdiDpcRoutine is called at PASSIVE_LEVEL, so it can access paged memory */
+        PAGED_CODE();
+        RxgkDriverExtension->DxgkDdiDpcRoutine(MiniportContext);
+    }
+    else
+    {
+        DPRINT1("IntVideoPortDpcWorker: Miniport DPC routine not available\n");
+    }
+
+    /* Clear the queued flag AFTER calling the miniport DPC routine.
+     * This prevents an infinite loop: if the miniport calls DxgkCbNotifyDpc
+     * during its DPC routine, the flag will still be 1, so we won't queue
+     * another DPC immediately. After the miniport DPC routine returns,
+     * we clear the flag, allowing the next DPC to be queued if needed.
+     * Use InterlockedExchange to atomically clear the flag to 0 (FALSE).
+     */
+    InterlockedExchange(&RxgkExt->DpcWorkItemQueued, 0);
+}
+
+/* DPC routine that queues a work item to defer miniport DPC to PASSIVE_LEVEL */
 VOID
 NTAPI
 IntVideoPortDeferredRoutine(
@@ -671,9 +717,47 @@ IntVideoPortDeferredRoutine(
     IN PVOID SystemArgument1,
     IN PVOID SystemArgument2)
 {
-    DPRINT1("IntVideoPortDeferredRoutine: Dxgkrnl entry\n");
-    PVOID HwDeviceExtension = &((PRXGK_PRIVATE_EXTENSION)DeferredContext)->MiniportContext;
-        RxgkDriverExtension->DxgkDdiDpcRoutine(HwDeviceExtension);
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    DPRINT1("IntVideoPortDeferredRoutine: Dxgkrnl entry (IRQL=%lu)\n", KeGetCurrentIrql());
+    
+    PRXGK_PRIVATE_EXTENSION RxgkExt = (PRXGK_PRIVATE_EXTENSION)DeferredContext;
+    if (!RxgkExt)
+    {
+        DPRINT1("IntVideoPortDeferredRoutine: NULL DeferredContext\n");
+        return;
+    }
+
+    /* Check if work item is already queued to avoid double-queuing.
+     * Use InterlockedCompareExchange to atomically check and set the flag.
+     * This prevents race conditions where multiple DPCs try to queue the work item simultaneously.
+     */
+    if (!RxgkExt->DpcWorkItem)
+    {
+        DPRINT1("IntVideoPortDeferredRoutine: DpcWorkItem not initialized\n");
+        return;
+    }
+
+    /* Atomically check if already queued and set to TRUE (1) if not.
+     * InterlockedCompareExchange returns the previous value.
+     * If it was 0 (FALSE), we set it to 1 (TRUE) and proceed.
+     * If it was already 1 (TRUE), another DPC already queued it, so we skip.
+     */
+    LONG Expected = 0; /* FALSE */
+    LONG Desired = 1;  /* TRUE */
+    LONG Previous = InterlockedCompareExchange(&RxgkExt->DpcWorkItemQueued, Desired, Expected);
+    
+    if (Previous != Expected)
+    {
+        /* Work item is already queued, skip */
+        DPRINT1("IntVideoPortDeferredRoutine: Work item already queued (Previous=%ld), skipping\n", Previous);
+        return;
+    }
+
+    /* Successfully set the flag to TRUE, now queue the work item */
+    IoQueueWorkItem(RxgkExt->DpcWorkItem, IntVideoPortDpcWorker, DelayedWorkQueue, RxgkExt);
 }
 
 /**
@@ -796,6 +880,15 @@ RxgkPortAddDevice(_In_    DRIVER_OBJECT *DriverObject,
     KeInitializeDpc((PRKDPC)&RxgkDriverExtension->DpcObject,
                     IntVideoPortDeferredRoutine,
                     RxgkDriverExtension);
+
+    /* Allocate and initialize work item for deferring miniport DPC to PASSIVE_LEVEL */
+    RxgkDriverExtension->DpcWorkItem = IoAllocateWorkItem(DriverObject->DeviceObject);
+    if (!RxgkDriverExtension->DpcWorkItem)
+    {
+        DPRINT1("RxgkStartAdapter: Failed to allocate DPC work item\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RxgkDriverExtension->DpcWorkItemQueued = 0; /* FALSE */
 
     /* Remove the initializing flag */
     (DriverObject->DeviceObject)->Flags &= ~DO_DEVICE_INITIALIZING;
