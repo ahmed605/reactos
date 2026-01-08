@@ -9,6 +9,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 #ifndef APIENTRY
 #define APIENTRY WINAPI
 #endif
@@ -513,6 +515,8 @@ W32Prof_Test_GL42Cube(const ProfilerConfig* cfg)
         /* Reload procs under the real context. */
         LoadGl42Procs();
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 4.2"), hdc, TRUE);
 
     if (!pglGenVertexArrays || !pglBindVertexArray || !pglGenBuffers || !pglBindBuffer || !pglBufferData ||
         !pglGetAttribLocation || !pglVertexAttribPointer || !pglEnableVertexAttribArray ||

@@ -1842,7 +1842,22 @@ typedef DXGKDDI_CREATECONTEXT                   *PDXGKDDI_CREATECONTEXT;
 typedef DXGKDDI_DESTROYCONTEXT                  *PDXGKDDI_DESTROYCONTEXT;
 typedef DXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT   *PDXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT;
 #endif
-// PDXGKDDI_CREATEALLOCATION is now properly defined above with DXGKDDI_CREATEALLOCATION
+/*
+ * NOTE:
+ * dispmprt.h's DRIVER_INITIALIZATION_DATA relies on a large set of PDXGKDDI_*
+ * function pointer typedefs.
+ *
+ * Historically this header used UINT32* placeholders for many of these types.
+ * That is dangerous because it silently turns function pointers into data
+ * pointers, obscuring ABI and making debugging/interop harder (even if pointer
+ * sizes match on x64).
+ *
+ * Only keep placeholders for DDIs we truly don't model yet. For DDIs we do
+ * model (Escape, OpenAllocation, Present, CreateContext, DestroyContext, etc)
+ * we must NOT override the real prototypes.
+ */
+
+/* PDXGKDDI_CREATEALLOCATION is now properly defined above with DXGKDDI_CREATEALLOCATION */
 typedef UINT32 *PDXGKDDI_DESTROYALLOCATION;
 typedef UINT32 *PDXGKDDI_DESCRIBEALLOCATION;
 typedef UINT32 *PDXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA;
@@ -1947,16 +1962,74 @@ typedef UINT32 *PDXGKDDI_STOPCAPTURE;
 typedef UINT32 *PDXGKDDI_CONTROLINTERRUPT;
 typedef UINT32 *PDXGKDDI_CREATEOVERLAY;
 typedef UINT32 *PDXGKDDI_DESTROYDEVICE;
-typedef UINT32 *PDXGKDDI_OPENALLOCATIONINFO;
 typedef UINT32 *PDXGKDDI_CLOSEALLOCATION;
-typedef UINT32 *PDXGKDDI_RENDER;
-typedef UINT32 *PDXGKDDI_PRESENT;
 typedef UINT32 *PDXGKDDI_UPDATEOVERLAY;
 typedef UINT32 *PDXGKDDI_FLIPOVERLAY;
 typedef UINT32 *PDXGKDDI_DESTROYOVERLAY;
-typedef UINT32 *PDXGKDDI_CREATECONTEXT;
-typedef UINT32 *PDXGKDDI_DESTROYCONTEXT;
 typedef UINT32 *PDXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT;
+
+/*
+ * Real prototypes required by dispmprt.h's DRIVER_INITIALIZATION_DATA:
+ * Define these as function pointer types (NOT UINT32* placeholders).
+ * We only need forward declarations for the payload structs here.
+ */
+
+typedef struct _DXGKARG_OPENALLOCATION DXGKARG_OPENALLOCATION;
+typedef struct _DXGKARG_PRESENT DXGKARG_PRESENT;
+typedef struct _DXGKARG_RENDER DXGKARG_RENDER;
+typedef struct _DXGKARG_CREATECONTEXT DXGKARG_CREATECONTEXT;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_OPENALLOCATIONINFO(
+    _In_ const HANDLE hDevice,
+    _In_ const DXGKARG_OPENALLOCATION* pOpenAllocation
+    );
+typedef DXGKDDI_OPENALLOCATIONINFO *PDXGKDDI_OPENALLOCATIONINFO;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_PRESENT(
+    _In_ const HANDLE hContext,
+    _Inout_ DXGKARG_PRESENT* pPresent
+    );
+typedef DXGKDDI_PRESENT *PDXGKDDI_PRESENT;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_RENDER(
+    _In_ const HANDLE hContext,
+    _Inout_ DXGKARG_RENDER* pRender
+    );
+typedef DXGKDDI_RENDER *PDXGKDDI_RENDER;
+
+/* Win7+ has RenderKm; for bring-up treat it as the same signature. */
+typedef DXGKDDI_RENDER *PDXGKDDI_RENDERKM;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_CREATECONTEXT(
+    _In_ const HANDLE hDevice,
+    _Inout_ DXGKARG_CREATECONTEXT* pCreateContext
+    );
+typedef DXGKDDI_CREATECONTEXT *PDXGKDDI_CREATECONTEXT;
+
+typedef
+_Check_return_
+NTSTATUS
+APIENTRY
+DXGKDDI_DESTROYCONTEXT(
+    _In_ const HANDLE hContext
+    );
+typedef DXGKDDI_DESTROYCONTEXT *PDXGKDDI_DESTROYCONTEXT;
 
 /*
  * dispmprt.h's DRIVER_INITIALIZATION_DATA references a number of additional

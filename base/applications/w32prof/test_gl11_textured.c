@@ -7,6 +7,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 static double
 TicksToMs(LONGLONG ticks, LONGLONG freq)
 {
@@ -163,6 +165,8 @@ W32Prof_Test_GL11TexturedCube(const ProfilerConfig* cfg)
         DestroyWindow(hRender);
         return;
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 1.1 Textured"), hdc, TRUE);
 
     if (!W32Prof_LoadLogoTestTgaFromResource(GetModuleHandle(NULL), &img))
     {

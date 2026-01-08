@@ -10,6 +10,7 @@
 
 #include <reactos/rddm/rxgkinterface.h>
 #include <include/rxgkpostdisplay.h>
+#include "handles.h"
 
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 
@@ -21,18 +22,22 @@ extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
  * VBox WDDM expects dxgkrnl to provide standard allocation private driver data
  * (VBOXWDDM_ALLOCINFO) via DxgkDdiGetStandardAllocationDriverData.
  *
- * For now we keep using the existing synthetic hAllocation=1 mapping for CPU lock,
- * but we populate real allocation private data so usermode accepts the resource.
  */
 typedef struct _RXGK_SHAREDPRIMARY_STATE
 {
     BOOLEAN Valid;
     D3DKMT_HANDLE GlobalShare; /* returned by GetSharedPrimaryHandle */
+    D3DKMT_HANDLE ResourceHandle;   /* per-process resource handle returned by OpenResource */
+    D3DKMT_HANDLE AllocationHandle; /* per-process allocation handle returned by OpenResource */
     D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
     UINT Width;
     UINT Height;
     D3DDDIFORMAT Format;
     D3DDDI_RATIONAL RefreshRate;
+    PHYSICAL_ADDRESS PhysAddr;
+    SIZE_T SizeBytes;
+    HANDLE MiniportAllocation; /* DXGK_ALLOCATIONINFO.hAllocation from DxgkDdiCreateAllocation */
+    HANDLE MiniportResource;   /* optional */
     PVOID AllocationPrivateDriverData;
     UINT AllocationPrivateDriverDataSize;
     PVOID ResourcePrivateDriverData;
@@ -42,6 +47,14 @@ typedef struct _RXGK_SHAREDPRIMARY_STATE
 static FAST_MUTEX g_SharedPrimaryMutex;
 static BOOLEAN g_SharedPrimaryMutexInit = FALSE;
 static RXGK_SHAREDPRIMARY_STATE g_SharedPrimary;
+static LONG g_NextKmtHandle = 0x100; /* avoid low/special handle values */
+
+static
+D3DKMT_HANDLE
+RxgkAllocKmtHandle(VOID)
+{
+    return (D3DKMT_HANDLE)InterlockedIncrement(&g_NextKmtHandle);
+}
 
 static
 VOID
@@ -69,6 +82,8 @@ RxgkSharedPrimaryEnsure(
     PVOID AllocPriv = NULL;
     UINT AllocPrivSize = 0;
     UINT ResPrivSize = 0;
+    DXGKARG_CREATEALLOCATION CreateAllocArgs;
+    DXGK_ALLOCATIONINFO KernelAllocInfo;
 
     if (!phSharedPrimary)
         return STATUS_INVALID_PARAMETER;
@@ -87,7 +102,7 @@ RxgkSharedPrimaryEnsure(
     if (!RxgkPostDisplayTryGetDisplayInfo(&DispInfo))
         return STATUS_SUCCESS;
 
-    if (DispInfo.Width == 0 || DispInfo.Height == 0)
+    if (DispInfo.Width == 0 || DispInfo.Height == 0 || DispInfo.Pitch == 0)
         return STATUS_SUCCESS;
 
     RxgkSharedPrimaryEnsureInit();
@@ -95,7 +110,8 @@ RxgkSharedPrimaryEnsure(
 
     if (g_SharedPrimary.Valid &&
         g_SharedPrimary.GlobalShare != 0 &&
-        g_SharedPrimary.VidPnSourceId == VidPnSourceId)
+        g_SharedPrimary.VidPnSourceId == VidPnSourceId &&
+        g_SharedPrimary.AllocationHandle != 0)
     {
         *phSharedPrimary = g_SharedPrimary.GlobalShare;
         ExReleaseFastMutex(&g_SharedPrimaryMutex);
@@ -167,17 +183,53 @@ RxgkSharedPrimaryEnsure(
         return Status;
     }
 
-    /* Replace any previous cached state. */
+    /*
+     * Now create the actual shared primary allocation in the miniport.
+     * For standard allocations we pass the VBOXWDDM_ALLOCINFO blob as the
+     * allocation private driver data (one allocation, no resource private data).
+     */
+    RtlZeroMemory(&KernelAllocInfo, sizeof(KernelAllocInfo));
+    KernelAllocInfo.pPrivateDriverData = AllocPriv;
+    KernelAllocInfo.PrivateDriverDataSize = AllocPrivSize;
+
+    RtlZeroMemory(&CreateAllocArgs, sizeof(CreateAllocArgs));
+    CreateAllocArgs.pPrivateDriverData = NULL;
+    CreateAllocArgs.PrivateDriverDataSize = 0;
+    CreateAllocArgs.NumAllocations = 1;
+    CreateAllocArgs.pAllocationInfo = &KernelAllocInfo;
+    CreateAllocArgs.hResource = NULL;
+    CreateAllocArgs.Flags.Value = 0;
+
+    Status = RxgkDriverExtension->DxgkDdiCreateAllocation(
+        RxgkDriverExtension->MiniportContext,
+        &CreateAllocArgs);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkSharedPrimaryEnsure: DxgkDdiCreateAllocation -> 0x%08X\n", Status);
+        ExFreePoolWithTag(AllocPriv, 'rPhS');
+        ExReleaseFastMutex(&g_SharedPrimaryMutex);
+        return Status;
+    }
+
+    /* Replace any previous cached state (bring-up: leak-free for the cached blob). */
     if (g_SharedPrimary.AllocationPrivateDriverData)
         ExFreePoolWithTag(g_SharedPrimary.AllocationPrivateDriverData, 'rPhS');
 
     g_SharedPrimary.Valid = TRUE;
-    g_SharedPrimary.GlobalShare = 1; /* bring-up stable global share handle */
+    if (g_SharedPrimary.GlobalShare == 0)
+        g_SharedPrimary.GlobalShare = RxgkAllocKmtHandle();
+    if (g_SharedPrimary.ResourceHandle == 0)
+        g_SharedPrimary.ResourceHandle = RxgkAllocKmtHandle();
+    g_SharedPrimary.AllocationHandle = RxgkAllocKmtHandle();
     g_SharedPrimary.VidPnSourceId = VidPnSourceId;
     g_SharedPrimary.Width = SharedPrimaryData.Width;
     g_SharedPrimary.Height = SharedPrimaryData.Height;
     g_SharedPrimary.Format = SharedPrimaryData.Format;
     g_SharedPrimary.RefreshRate = SharedPrimaryData.RefreshRate;
+    g_SharedPrimary.PhysAddr = DispInfo.PhysicAddress;
+    g_SharedPrimary.SizeBytes = (SIZE_T)DispInfo.Pitch * (SIZE_T)DispInfo.Height;
+    g_SharedPrimary.MiniportAllocation = KernelAllocInfo.hAllocation;
+    g_SharedPrimary.MiniportResource = CreateAllocArgs.hResource;
     g_SharedPrimary.AllocationPrivateDriverData = AllocPriv;
     g_SharedPrimary.AllocationPrivateDriverDataSize = Std.AllocationPrivateDriverDataSize;
     g_SharedPrimary.ResourcePrivateDriverData = NULL;
@@ -185,12 +237,73 @@ RxgkSharedPrimaryEnsure(
 
     *phSharedPrimary = g_SharedPrimary.GlobalShare;
 
-    DPRINT1("RxgkSharedPrimaryEnsure: cached shared primary %ux%u fmt=%u src=%u AllocPriv=%u bytes\n",
+    DPRINT1("RxgkSharedPrimaryEnsure: shared primary %ux%u fmt=%u src=%u GlobalShare=%p Res=%p Alloc=%p AllocPriv=%u bytes MiniAlloc=%p\n",
             g_SharedPrimary.Width, g_SharedPrimary.Height, (UINT)g_SharedPrimary.Format,
-            (UINT)g_SharedPrimary.VidPnSourceId, (UINT)g_SharedPrimary.AllocationPrivateDriverDataSize);
+            (UINT)g_SharedPrimary.VidPnSourceId,
+            (PVOID)(ULONG_PTR)g_SharedPrimary.GlobalShare,
+            (PVOID)(ULONG_PTR)g_SharedPrimary.ResourceHandle,
+            (PVOID)(ULONG_PTR)g_SharedPrimary.AllocationHandle,
+            (UINT)g_SharedPrimary.AllocationPrivateDriverDataSize,
+            g_SharedPrimary.MiniportAllocation);
+
+    /* Allow miniport to resolve the synthetic KMT hAllocation via DxgkCbGetHandleData. */
+    (VOID)RxgkKmtAllocationInsert(g_SharedPrimary.AllocationHandle, g_SharedPrimary.MiniportAllocation);
 
     ExReleaseFastMutex(&g_SharedPrimaryMutex);
     return STATUS_SUCCESS;
+}
+
+BOOLEAN
+NTAPI
+RxgkSharedPrimaryQuery(
+    _Out_opt_ D3DKMT_HANDLE* phSharedPrimary,
+    _Out_opt_ D3DKMT_HANDLE* phResource,
+    _Out_opt_ D3DKMT_HANDLE* phAllocation,
+    _Out_opt_ HANDLE* phMiniportAllocation,
+    _Out_opt_ PHYSICAL_ADDRESS* pPhysAddr,
+    _Out_opt_ SIZE_T* pSize)
+{
+    RxgkSharedPrimaryEnsureInit();
+    ExAcquireFastMutex(&g_SharedPrimaryMutex);
+    if (!g_SharedPrimary.Valid || g_SharedPrimary.GlobalShare == 0 || g_SharedPrimary.AllocationHandle == 0)
+    {
+        ExReleaseFastMutex(&g_SharedPrimaryMutex);
+        return FALSE;
+    }
+
+    if (phSharedPrimary) *phSharedPrimary = g_SharedPrimary.GlobalShare;
+    if (phResource) *phResource = g_SharedPrimary.ResourceHandle;
+    if (phAllocation) *phAllocation = g_SharedPrimary.AllocationHandle;
+    if (phMiniportAllocation) *phMiniportAllocation = g_SharedPrimary.MiniportAllocation;
+    if (pPhysAddr) *pPhysAddr = g_SharedPrimary.PhysAddr;
+    if (pSize) *pSize = g_SharedPrimary.SizeBytes;
+    ExReleaseFastMutex(&g_SharedPrimaryMutex);
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+RxgkSharedPrimaryGetAllocationPrivateData(
+    _Out_ PVOID* ppData,
+    _Out_ UINT* pSize)
+{
+    if (!ppData || !pSize)
+        return FALSE;
+
+    *ppData = NULL;
+    *pSize = 0;
+
+    RxgkSharedPrimaryEnsureInit();
+    ExAcquireFastMutex(&g_SharedPrimaryMutex);
+    if (g_SharedPrimary.Valid && g_SharedPrimary.AllocationPrivateDriverData && g_SharedPrimary.AllocationPrivateDriverDataSize)
+    {
+        *ppData = g_SharedPrimary.AllocationPrivateDriverData;
+        *pSize = g_SharedPrimary.AllocationPrivateDriverDataSize;
+        ExReleaseFastMutex(&g_SharedPrimaryMutex);
+        return TRUE;
+    }
+    ExReleaseFastMutex(&g_SharedPrimaryMutex);
+    return FALSE;
 }
 
 /*
@@ -351,8 +464,9 @@ NTAPI
 RxgkWin32kQueryResourceInfo(
     _Inout_ D3DKMT_QUERYRESOURCEINFO* Args)
 {
-    NTSTATUS Status;
     D3DKMT_HANDLE Shared = 0;
+    D3DKMT_HANDLE Res = 0;
+    D3DKMT_HANDLE Alloc = 0;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -380,12 +494,9 @@ RxgkWin32kQueryResourceInfo(
      * If Vista ddraw is opening the shared primary (hGlobalShare=1), it expects
      * allocation private driver data (e.g. VBOXWDDM_ALLOCINFO) to be available.
      */
-    if (Args->hGlobalShare == 1)
+    if (RxgkSharedPrimaryQuery(&Shared, &Res, &Alloc, NULL, NULL, NULL) &&
+        Args->hGlobalShare == Shared)
     {
-        Status = RxgkSharedPrimaryEnsure(0, 0, &Shared);
-        if (!NT_SUCCESS(Status) || Shared == 0)
-            return NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
-
         RxgkSharedPrimaryEnsureInit();
         ExAcquireFastMutex(&g_SharedPrimaryMutex);
         Args->NumAllocations = 1;
@@ -444,8 +555,9 @@ NTAPI
 RxgkWin32kOpenResource(
     _Inout_ D3DKMT_OPENRESOURCE* Args)
 {
-    NTSTATUS Status;
     D3DKMT_HANDLE Shared = 0;
+    D3DKMT_HANDLE Res = 0;
+    D3DKMT_HANDLE Alloc = 0;
     UINT RequiredTotal = 0;
 
     if (!Args)
@@ -485,15 +597,12 @@ RxgkWin32kOpenResource(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (Args->hGlobalShare != 1)
+    if (!(RxgkSharedPrimaryQuery(&Shared, &Res, &Alloc, NULL, NULL, NULL) &&
+          Args->hGlobalShare == Shared))
     {
         DPRINT1("RxgkWin32kOpenResource: Unsupported hGlobalShare=%p\n", (PVOID)(ULONG_PTR)Args->hGlobalShare);
         return STATUS_INVALID_HANDLE;
     }
-
-    Status = RxgkSharedPrimaryEnsure(0, 0, &Shared);
-    if (!NT_SUCCESS(Status) || Shared == 0)
-        return NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
 
     RxgkSharedPrimaryEnsureInit();
     ExAcquireFastMutex(&g_SharedPrimaryMutex);
@@ -522,7 +631,7 @@ RxgkWin32kOpenResource(
                           g_SharedPrimary.AllocationPrivateDriverDataSize);
             ExReleaseFastMutex(&g_SharedPrimaryMutex);
 
-            Args->pOpenAllocationInfo[0].hAllocation = 1; /* keep existing lock mapping */
+            Args->pOpenAllocationInfo[0].hAllocation = Alloc;
             Args->pOpenAllocationInfo[0].pPrivateDriverData = Args->pTotalPrivateDriverDataBuffer;
             Args->pOpenAllocationInfo[0].PrivateDriverDataSize = RequiredTotal;
         }
@@ -541,13 +650,13 @@ RxgkWin32kOpenResource(
                       g_SharedPrimary.AllocationPrivateDriverDataSize);
         ExReleaseFastMutex(&g_SharedPrimaryMutex);
 
-        Args->pOpenAllocationInfo[0].hAllocation = 1;
+        Args->pOpenAllocationInfo[0].hAllocation = Alloc;
         Args->pOpenAllocationInfo[0].pPrivateDriverData = Args->pTotalPrivateDriverDataBuffer;
         Args->pOpenAllocationInfo[0].PrivateDriverDataSize = RequiredTotal;
     }
 
     Args->TotalPrivateDriverDataBufferSize = RequiredTotal;
-    Args->hResource = 2; /* synthetic per-process resource handle */
+    Args->hResource = Res;
 
     DPRINT1("RxgkWin32kOpenResource: Success, hResource=%p hAllocation=%p PrivateDriverDataSize=%u\n",
             (PVOID)(ULONG_PTR)Args->hResource,

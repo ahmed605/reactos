@@ -82,9 +82,15 @@ RxgkPortInitializeMiniport(_In_ PDRIVER_OBJECT DriverObject,
     RxgkDriverExtension->DxgkDdiEscape = DriverInitData->DxgkDdiEscape;
     RxgkDriverExtension->DxgkDdiQueryAdapterInfo = DriverInitData->DxgkDdiQueryAdapterInfo;
     RxgkDriverExtension->DxgkDdiCreateDevice = DriverInitData->DxgkDdiCreateDevice;
+    RxgkDriverExtension->DxgkDdiDestroyDevice =
+        (PRXGKDDI_DESTROYDEVICE)DriverInitData->DxgkDdiDestroyDevice;
     RxgkDriverExtension->DxgkDdiCreateAllocation = DriverInitData->DxgkDdiCreateAllocation;
+    RxgkDriverExtension->DxgkDdiOpenAllocation =
+        (PRXGKDDI_OPENALLOCATION)DriverInitData->DxgkDdiOpenAllocation;
     RxgkDriverExtension->DxgkDdiGetStandardAllocationDriverData =
         (PRXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA)DriverInitData->DxgkDdiGetStandardAllocationDriverData;
+    RxgkDriverExtension->DxgkDdiPresent =
+        (PRXGKDDI_PRESENT)DriverInitData->DxgkDdiPresent;
     RxgkDriverExtension->DxgkDdiCreateContext = (PRXGKDDI_CREATECONTEXT)DriverInitData->DxgkDdiCreateContext;
     RxgkDriverExtension->DxgkDdiDestroyContext = (PRXGKDDI_DESTROYCONTEXT)DriverInitData->DxgkDdiDestroyContext;
 

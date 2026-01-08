@@ -10,6 +10,8 @@
 
 #include <reactos/rddm/rxgkinterface.h>
 
+#include "handles.h"
+
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 
 NTSTATUS
@@ -21,6 +23,8 @@ RxgkWin32kEscape(_In_ const D3DKMT_ESCAPE* Args)
     PVOID KmPrivate = NULL;
     ULONG EscapeCode = 0;
     ULONG EscapeCmdSpecific = 0;
+    HANDLE MiniportDevice = NULL;
+    HANDLE MiniportContext = NULL;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -85,8 +89,32 @@ RxgkWin32kEscape(_In_ const D3DKMT_ESCAPE* Args)
     
     // Map handles from D3DKMT to DXGK format
     // hDevice and hContext are optional in D3DKMT_ESCAPE
-    EscapeArgs.hDevice = Args->hDevice ? (HANDLE)(ULONG_PTR)Args->hDevice : NULL;
-    EscapeArgs.hContext = Args->hContext ? (HANDLE)(ULONG_PTR)Args->hContext : NULL;
+    if (Args->hDevice)
+    {
+        MiniportDevice = RxgkKmtDeviceLookup(Args->hDevice);
+        if (!MiniportDevice)
+        {
+            DPRINT1("RxgkWin32kEscape: Invalid KMT device handle %p\n", (PVOID)(ULONG_PTR)Args->hDevice);
+            if (KmPrivate)
+                ExFreePoolWithTag(KmPrivate, 'pEsR');
+            return STATUS_INVALID_HANDLE;
+        }
+    }
+
+    if (Args->hContext)
+    {
+        MiniportContext = RxgkKmtContextLookup(Args->hContext);
+        if (!MiniportContext)
+        {
+            DPRINT1("RxgkWin32kEscape: Invalid KMT context handle %p\n", (PVOID)(ULONG_PTR)Args->hContext);
+            if (KmPrivate)
+                ExFreePoolWithTag(KmPrivate, 'pEsR');
+            return STATUS_INVALID_HANDLE;
+        }
+    }
+
+    EscapeArgs.hDevice = MiniportDevice;
+    EscapeArgs.hContext = MiniportContext;
     EscapeArgs.hKmdProcessHandle = NULL; // Not used in current interface version
     
     // Copy flags - D3DDDI_ESCAPEFLAGS should be compatible

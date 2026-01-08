@@ -17,6 +17,66 @@ BOOLEAN g_DxgkCallbacksValid = FALSE;
 static LONG g_CddDbgPresentCalls = 0;
 
 BOOL
+CddEnsureDxgkCallbacks(VOID);
+
+static
+BOOL
+CddEnsureDxgkDeviceContext(_Inout_ PCDDPDEV ppdev)
+{
+   NTSTATUS Status;
+   D3DKMT_CREATEDEVICE CreateDev;
+   D3DKMT_CREATECONTEXT CreateCtx;
+
+   if (!ppdev)
+      return FALSE;
+
+   if (!CddEnsureDxgkCallbacks())
+      return FALSE;
+
+   if (!g_DxgkCallbacks.RxgkIntPfnCreateDevice || !g_DxgkCallbacks.RxgkIntPfnCreateContext)
+      return FALSE;
+
+   if (ppdev->hDxgContext != 0 && ppdev->hDxgDevice != 0)
+      return TRUE;
+
+   RtlZeroMemory(&CreateDev, sizeof(CreateDev));
+   CreateDev.hAdapter = 0; /* bring-up: dxgkrnl treats 0 as default adapter */
+   CreateDev.Flags.LegacyMode = 1;
+   CreateDev.Flags.RequestVSync = 0;
+
+   Status = g_DxgkCallbacks.RxgkIntPfnCreateDevice(&CreateDev);
+   if (!NT_SUCCESS(Status) || CreateDev.hDevice == 0)
+   {
+      DPRINT1("cdd: CddEnsureDxgkDeviceContext: CreateDevice failed 0x%08X hDevice=%p\n",
+              Status, (PVOID)(ULONG_PTR)CreateDev.hDevice);
+      return FALSE;
+   }
+
+   ppdev->hDxgDevice = CreateDev.hDevice;
+
+   RtlZeroMemory(&CreateCtx, sizeof(CreateCtx));
+   CreateCtx.hDevice = ppdev->hDxgDevice;
+   CreateCtx.NodeOrdinal = 0;
+   CreateCtx.EngineAffinity = 0;
+   CreateCtx.Flags.Value = 0; /* PrivateDriverDataSize==0 -> VBox system context path */
+   CreateCtx.pPrivateDriverData = NULL;
+   CreateCtx.PrivateDriverDataSize = 0; /* VBox: system context path */
+   CreateCtx.ClientHint = D3DKMT_CLIENTHINT_CDD;
+
+   Status = g_DxgkCallbacks.RxgkIntPfnCreateContext(&CreateCtx);
+   if (!NT_SUCCESS(Status) || CreateCtx.hContext == 0)
+   {
+      DPRINT1("cdd: CddEnsureDxgkDeviceContext: CreateContext failed 0x%08X hContext=%p\n",
+              Status, (PVOID)(ULONG_PTR)CreateCtx.hContext);
+      ppdev->hDxgDevice = 0;
+      return FALSE;
+   }
+
+   ppdev->hDxgContext = CreateCtx.hContext;
+   return TRUE;
+}
+
+BOOL
 CddEnsureDxgkCallbacks(VOID)
 {
    NTSTATUS Status;
@@ -99,11 +159,16 @@ CddPresent(_In_ DHPDEV dhpdev,
    }
 
    RtlZeroMemory(&Args, sizeof(Args));
-   Args.hDevice = 0;
+   if (!CddEnsureDxgkDeviceContext(ppdev))
+      return FALSE;
+
+   Args.hContext = ppdev->hDxgContext;
    Args.VidPnSourceId = 0;
-   Args.hSource = 0; /* Bring-up: dxgkrnl present ignores hSource currently */
-   Args.hDestination = 0;
+   Args.hSource = ppdev->hPrimaryAllocation;
+   Args.hDestination = ppdev->hPrimaryAllocation;
    Args.Color = 0;   /* Not used by our dxgkrnl present once wired to framebuffer */
+   Args.Flags.Value = 0;
+   Args.Flags.Blt = 1; /* VBox present: BLT works for system/GDI context */
 
    if (prcl)
    {
@@ -896,6 +961,12 @@ DrvEnableSurface(
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng,
                             HOOK_BITBLT |
                             HOOK_COPYBITS |
+                            HOOK_PAINT |
+                            HOOK_LINETO |
+                            HOOK_FILLPATH |
+                            HOOK_STROKEANDFILLPATH |
+                            HOOK_STRETCHBLT |
+                            HOOK_PLGBLT |
                             HOOK_TEXTOUT |
                             HOOK_STROKEPATH |
                             HOOK_TRANSPARENTBLT |
@@ -918,6 +989,8 @@ DrvMovePointer(
    IN RECTL *prcl)
 {
    EngMovePointer(pso, x, y, prcl);
+   if (pso)
+      (void)CddPresent(pso->dhpdev, prcl);
 }
 
 BOOL
@@ -943,7 +1016,10 @@ DrvSetPointerShape(
    IN RECTL *prcl,
    IN FLONG fl)
 {
-   return EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+   ULONG ret = EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+   if (pso)
+      (void)CddPresent(pso->dhpdev, prcl);
+   return ret;
 }
 
 ULONG

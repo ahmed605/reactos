@@ -5,6 +5,8 @@
 
 #include <debug.h>
 
+#include "kmt/handles.h"
+
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 DXGKRNL_INTERFACE DxgkrnlInterface;
 
@@ -1372,7 +1374,17 @@ APIENTRY
 CALLBACK
 RxgkCbGetHandleData(IN_CONST_PDXGKARGCB_GETHANDLEDATA GetHandleData)
 {
-    UNIMPLEMENTED;
+    if (!GetHandleData)
+        return NULL;
+
+    switch (GetHandleData->Type)
+    {
+        case DXGK_HANDLE_ALLOCATION:
+            return (VOID*)RxgkKmtAllocationLookup((D3DKMT_HANDLE)GetHandleData->hObject);
+        default:
+            break;
+    }
+
     return NULL;
 }
 

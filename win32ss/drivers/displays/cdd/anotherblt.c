@@ -3,6 +3,14 @@
 
 static LONG g_CddDbgBitBltCalls = 0;
 
+static __inline const RECTL*
+CddPickBoundsFromClip(_In_opt_ const CLIPOBJ* pco)
+{
+    if (pco)
+        return &pco->rclBounds;
+    return NULL;
+}
+
 
 
 BOOL
@@ -68,9 +76,11 @@ BOOL APIENTRY DrvStrokePath(
     _In_ MIX        mix
     )
 {
-
-    return EngStrokePath(pso, ppo, pco,
-                    pxo, pbo, pptlBrushOrg, plineattrs, mix);
+    BOOL ok = EngStrokePath(pso, ppo, pco,
+                            pxo, pbo, pptlBrushOrg, plineattrs, mix);
+    if (ok && pso)
+        (void)CddPresent(pso->dhpdev, CddPickBoundsFromClip(pco));
+    return ok;
 }
 
 BOOL APIENTRY DrvTransparentBlt(
@@ -83,10 +93,13 @@ BOOL APIENTRY DrvTransparentBlt(
     _In_ ULONG      iTransColor,
     _In_ ULONG      ulReserved)
 {
-    return EngTransparentBlt(psoDst, psoSrc,
-                             pco, pxlo, prclDst,
-                             prclSrc, iTransColor,
-                              ulReserved);
+    BOOL ok = EngTransparentBlt(psoDst, psoSrc,
+                                pco, pxlo, prclDst,
+                                prclSrc, iTransColor,
+                                ulReserved);
+    if (ok && psoDst)
+        (void)CddPresent(psoDst->dhpdev, prclDst);
+    return ok;
 }
 
 BOOL
@@ -146,8 +159,11 @@ DrvLineTo(
     _In_ RECTL *RectBounds,
     _In_ MIX mix)
 {
-    return EngLineTo(DestObj, Clip, Brush,
-                    x1,  y1, x2, y2, RectBounds, mix);
+    BOOL ok = EngLineTo(DestObj, Clip, Brush,
+                        x1, y1, x2, y2, RectBounds, mix);
+    if (ok && DestObj)
+        (void)CddPresent(DestObj->dhpdev, RectBounds ? RectBounds : CddPickBoundsFromClip(Clip));
+    return ok;
 }
 
 BOOL APIENTRY DrvFillPath(
@@ -160,9 +176,12 @@ BOOL APIENTRY DrvFillPath(
     _In_ FLONG     flOptions
     )
 {
-    return EngFillPath(pso, ppo, pco,
-                      pbo, pptlBrushOrg,
-                      mix, flOptions);
+    BOOL ok = EngFillPath(pso, ppo, pco,
+                          pbo, pptlBrushOrg,
+                          mix, flOptions);
+    if (ok && pso)
+        (void)CddPresent(pso->dhpdev, CddPickBoundsFromClip(pco));
+    return ok;
 }
 
 BOOL APIENTRY DrvStrokeAndFillPath(
@@ -178,10 +197,26 @@ BOOL APIENTRY DrvStrokeAndFillPath(
     _In_ FLONG      flOptions
     )
 {
-    return  EngStrokeAndFillPath(pso, ppo, pco,
-                               pxo, pboStroke,
-                               plineattrs, pboFill,
-                              pptlBrushOrg,  mixFill, flOptions);
+    BOOL ok = EngStrokeAndFillPath(pso, ppo, pco,
+                                   pxo, pboStroke,
+                                   plineattrs, pboFill,
+                                   pptlBrushOrg, mixFill, flOptions);
+    if (ok && pso)
+        (void)CddPresent(pso->dhpdev, CddPickBoundsFromClip(pco));
+    return ok;
+}
+
+BOOL APIENTRY DrvPaint(
+    _Inout_ SURFOBJ *pso,
+    _In_ CLIPOBJ *pco,
+    _In_ BRUSHOBJ *pbo,
+    _In_ POINTL *pptlBrushOrg,
+    _In_ MIX mix)
+{
+    BOOL ok = EngPaint(pso, pco, pbo, pptlBrushOrg, mix);
+    if (ok && pso)
+        (void)CddPresent(pso->dhpdev, CddPickBoundsFromClip(pco));
+    return ok;
 }
 
 BOOL APIENTRY DrvStretchBltROP(
@@ -200,10 +235,13 @@ BOOL APIENTRY DrvStretchBltROP(
     _In_ DWORD            rop4
     )
 {
-    return EngStretchBltROP(psoDest, psoSrc, psoMask,
-                            pco, pxlo, pca, pptlHTOrg,
-                            prclDest, prclSrc, pptlMask,
-                           iMode, pbo,  rop4);
+    BOOL ok = EngStretchBltROP(psoDest, psoSrc, psoMask,
+                               pco, pxlo, pca, pptlHTOrg,
+                               prclDest, prclSrc, pptlMask,
+                               iMode, pbo, rop4);
+    if (ok && psoDest)
+        (void)CddPresent(psoDest->dhpdev, prclDest);
+    return ok;
 }
 
 
@@ -221,7 +259,10 @@ BOOL APIENTRY DrvPlgBlt(
     _In_ ULONG            iMode
     )
 {
-    return EngPlgBlt(psoTrg, psoSrc, psoMsk,
-                      pco, pxlo, pca, pptlBrushOrg,
-                      pptfx, prcl, pptl, iMode);
+    BOOL ok = EngPlgBlt(psoTrg, psoSrc, psoMsk,
+                        pco, pxlo, pca, pptlBrushOrg,
+                        pptfx, prcl, pptl, iMode);
+    if (ok && psoTrg)
+        (void)CddPresent(psoTrg->dhpdev, prcl ? prcl : CddPickBoundsFromClip(pco));
+    return ok;
 }

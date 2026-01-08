@@ -10,6 +10,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 #ifndef APIENTRY
 #define APIENTRY WINAPI
 #endif
@@ -529,6 +531,8 @@ W32Prof_Test_GL42TexturedCube(const ProfilerConfig* cfg)
 
         LoadGl42Procs();
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 4.2 Textured"), hdc, TRUE);
 
     if (!pglGenVertexArrays || !pglBindVertexArray || !pglGenBuffers || !pglBindBuffer || !pglBufferData ||
         !pglGetAttribLocation || !pglVertexAttribPointer || !pglEnableVertexAttribArray ||

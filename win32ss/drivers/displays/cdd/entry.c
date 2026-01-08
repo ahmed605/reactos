@@ -31,6 +31,7 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvLineTo, (PFN)DrvLineTo},
    {INDEX_DrvFillPath, (PFN)DrvFillPath},
    {INDEX_DrvStrokeAndFillPath, (PFN)DrvStrokeAndFillPath},
+   {INDEX_DrvPaint, (PFN)DrvPaint},
    {INDEX_DrvStretchBltROP, (PFN)DrvStretchBltROP},
    {INDEX_DrvPlgBlt, (PFN)DrvPlgBlt},
 };

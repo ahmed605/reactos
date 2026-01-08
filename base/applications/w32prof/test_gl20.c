@@ -6,6 +6,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 #ifndef APIENTRY
 #define APIENTRY WINAPI
 #endif
@@ -22,7 +24,6 @@
 #ifndef GL_LINK_STATUS
 #define GL_LINK_STATUS 0x8B82
 #endif
-
 /* Minimal OpenGL 2.0 entry points (loaded via wglGetProcAddress) */
 typedef char GLchar;
 typedef GLuint (APIENTRY *PFNGLCREATESHADERPROC)(GLenum type);
@@ -316,6 +317,8 @@ W32Prof_Test_GL20Cube(const ProfilerConfig* cfg)
         DestroyWindow(hRender);
         return;
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 2.0"), hdc, TRUE);
 
     LoadGl2Procs();
     prog = BuildProgram();

@@ -7,6 +7,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 #ifndef APIENTRY
 #define APIENTRY WINAPI
 #endif
@@ -356,6 +358,8 @@ W32Prof_Test_GL20TexturedCube(const ProfilerConfig* cfg)
         DestroyWindow(hRender);
         return;
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 2.0 Textured"), hdc, TRUE);
 
     LoadGl2Procs();
     prog = BuildProgram();

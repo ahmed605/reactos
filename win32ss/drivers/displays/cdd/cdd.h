@@ -80,6 +80,8 @@ typedef struct _CDDPDEV
 
    /* RDDM / Dxgkrnl interop (bring-up) */
    D3DKMT_HANDLE hPrimaryAllocation;
+   D3DKMT_HANDLE hDxgDevice;
+   D3DKMT_HANDLE hDxgContext;
    
    /* Current display mode (from DEVMODE) */
    DEVMODEW CurrentDevMode;
@@ -328,6 +330,14 @@ DrvStrokeAndFillPath(_Inout_  SURFOBJ   *pso,
                      _In_     POINTL    *pptlBrushOrg,
                      _In_     MIX        mixFill,
                      _In_     FLONG      flOptions);
+
+BOOL
+APIENTRY
+DrvPaint(_Inout_ SURFOBJ *pso,
+         _In_ CLIPOBJ *pco,
+         _In_ BRUSHOBJ *pbo,
+         _In_ POINTL *pptlBrushOrg,
+         _In_ MIX mix);
 
 BOOL
 APIENTRY

@@ -10,6 +10,8 @@
 
 #include <reactos/rddm/rxgkinterface.h>
 
+#include "handles.h"
+
 extern PRXGK_PRIVATE_EXTENSION RxgkDriverExtension;
 
 NTSTATUS
@@ -18,6 +20,7 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
 {
     DXGKARG_CREATEDEVICE CreateDeviceArgs;
     NTSTATUS Status;
+    D3DKMT_HANDLE KmtDevice;
 
     if (!Args)
         return STATUS_INVALID_PARAMETER;
@@ -27,12 +30,15 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
             Args->Flags.LegacyMode,
             Args->Flags.RequestVSync);
 
-    // Validate adapter handle
+    /*
+     * Bring-up: CDD creates a device via the dxgkrnl callback table and passes
+     * hAdapter==0. We currently only support a single adapter instance and
+     * use RxgkDriverExtension->MiniportContext directly, so allow 0 here.
+     *
+     * User-mode paths still provide a real adapter handle.
+     */
     if (Args->hAdapter == 0)
-    {
-        DPRINT1("RxgkWin32kCreateDevice: Invalid adapter handle\n");
-        return STATUS_INVALID_HANDLE;
-    }
+        DPRINT1("RxgkWin32kCreateDevice: hAdapter==0 (CDD/default adapter)\n");
 
     if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiCreateDevice)
     {
@@ -41,11 +47,10 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
     }
 
     RtlZeroMemory(&CreateDeviceArgs, sizeof(CreateDeviceArgs));
-    
-    // Convert D3DKMT_CREATEDEVICE to DXGKARG_CREATEDEVICE
-    // For user-mode creation, hAdapter is a handle; for kernel-mode, it's a pointer
-    // Since we're in kernel mode, we use the MiniportContext directly
-    CreateDeviceArgs.hDevice = NULL; // Output parameter
+
+    /* Allocate an opaque KMT handle (32-bit) and pass it as the runtime hDevice. */
+    KmtDevice = RxgkKmtAllocHandle();
+    CreateDeviceArgs.hDevice = (HANDLE)(ULONG_PTR)KmtDevice;
     
     // DXGK_CREATEDEVICEFLAGS has different members than D3DKMT_CREATEDEVICEFLAGS
     // D3DKMT flags: LegacyMode, RequestVSync, DisableGpuTimeout
@@ -68,8 +73,16 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
         return Status;
     }
 
-    // Convert back to D3DKMT format
-    Args->hDevice = (D3DKMT_HANDLE)(ULONG_PTR)CreateDeviceArgs.hDevice;
+    /* Map KMT device handle -> miniport device pointer. */
+    Status = RxgkKmtDeviceInsert(KmtDevice, CreateDeviceArgs.hDevice);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkWin32kCreateDevice: RxgkKmtDeviceInsert failed 0x%08X\n", Status);
+        return Status;
+    }
+
+    /* Return opaque KMT handle to caller. */
+    Args->hDevice = KmtDevice;
     
     // D3D10 compatibility fields - these are typically used for command buffer management
     // D3D10 requires these to be set up for command submission
@@ -91,7 +104,44 @@ RxgkWin32kCreateDevice(_Inout_ D3DKMT_CREATEDEVICE* Args)
     // - PatchLocationListSize: Number of patch locations
     // These are typically managed by the user-mode D3D10 runtime and kernel-mode scheduler
 
-    DPRINT1("RxgkWin32kCreateDevice: Success, hDevice=%p\n", (PVOID)(ULONG_PTR)Args->hDevice);
+    DPRINT1("RxgkWin32kCreateDevice: Success, hDevice=%p (miniport=%p)\n",
+            (PVOID)(ULONG_PTR)Args->hDevice,
+            (PVOID)(ULONG_PTR)CreateDeviceArgs.hDevice);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RxgkWin32kDestroyDevice(_In_ const D3DKMT_DESTROYDEVICE* Args)
+{
+    HANDLE MiniportDevice;
+    NTSTATUS Status;
+
+    if (!Args)
+        return STATUS_INVALID_PARAMETER;
+
+    DPRINT1("RxgkWin32kDestroyDevice: hDevice=%p\n", (PVOID)(ULONG_PTR)Args->hDevice);
+
+    if (!RxgkDriverExtension || !RxgkDriverExtension->DxgkDdiDestroyDevice)
+    {
+        DPRINT1("RxgkWin32kDestroyDevice: DxgkDdiDestroyDevice not available\n");
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+
+    MiniportDevice = RxgkKmtDeviceLookup(Args->hDevice);
+    if (!MiniportDevice)
+        return STATUS_INVALID_HANDLE;
+
+    /* Remove mapping first so stale handles fail fast if reused. */
+    RxgkKmtDeviceRemove(Args->hDevice);
+
+    Status = RxgkDriverExtension->DxgkDdiDestroyDevice(MiniportDevice);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RxgkWin32kDestroyDevice: DxgkDdiDestroyDevice failed 0x%08X\n", Status);
+        return Status;
+    }
 
     return STATUS_SUCCESS;
 }

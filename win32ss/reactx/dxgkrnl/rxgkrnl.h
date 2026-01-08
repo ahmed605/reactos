@@ -119,6 +119,164 @@ NTSTATUS
 #endif /* __RXGK_DXGK_STANDARD_ALLOC_DEFS__ */
 
 /*
+ * WDDM 1.x present DDI payloads are missing from our public headers, but VBox's
+ * WDDM miniport implements DxgkDdiPresent (Vista/Win7 style).
+ *
+ * Define the minimal Vista-compatible structures we need to call it.
+ * Layout matches ReverseEngineredRefs/winvistsa/dxgkrnl.h.
+ */
+#ifndef __RXGK_DXGK_PRESENT_DEFS__
+#define __RXGK_DXGK_PRESENT_DEFS__
+
+typedef struct _DXGK_ALLOCATIONLIST
+{
+    HANDLE hDeviceSpecificAllocation;
+    union
+    {
+        struct
+        {
+            UINT WriteOperation : 1;
+            UINT SegmentId      : 5;
+            UINT Reserved       : 26;
+        };
+        UINT Value;
+    };
+    union
+    {
+        LARGE_INTEGER PhysicalAddress;
+        D3DGPU_VIRTUAL_ADDRESS VirtualAddress;
+    };
+} DXGK_ALLOCATIONLIST, *PDXGK_ALLOCATIONLIST;
+
+typedef struct _DXGK_PRESENTFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Blt                     : 1;
+            UINT ColorFill               : 1;
+            UINT Flip                    : 1;
+            UINT FlipWithNoWait          : 1;
+            UINT SrcColorKey             : 1;
+            UINT DstColorKey             : 1;
+            UINT LinearToSrgb            : 1;
+            UINT Rotate                  : 1;
+            UINT FlipStereo              : 1;
+            UINT FlipStereoTemporaryMono : 1;
+            UINT FlipStereoPreferRight   : 1;
+            UINT BltStereoUseRight       : 1;
+            UINT FlipWithMultiPlaneOverlay : 1;
+            UINT RedirectedFlip          : 1;
+            UINT Reserved                : 18;
+        };
+        UINT Value;
+    };
+} DXGK_PRESENTFLAGS, *PDXGK_PRESENTFLAGS;
+
+typedef struct _DXGKARG_PRESENT
+{
+    PVOID pDmaBuffer;
+    UINT  DmaSize;
+    PVOID pDmaBufferPrivateData;
+    UINT  DmaBufferPrivateDataSize;
+    union
+    {
+        DXGK_ALLOCATIONLIST* pAllocationList;
+        PVOID pAllocationInfo; /* unused */
+        PVOID pPresentMultiPlaneOverlayInfo; /* unused */
+    };
+    D3DDDI_PATCHLOCATIONLIST* pPatchLocationListOut;
+    UINT PatchLocationListOutSize;
+    UINT MultipassOffset;
+    UINT Color;
+    RECT DstRect;
+    RECT SrcRect;
+    UINT SubRectCnt;
+    const RECT* pDstSubRects;
+    D3DDDI_FLIPINTERVAL_TYPE FlipInterval;
+    DXGK_PRESENTFLAGS Flags;
+    UINT DmaBufferSegmentId;
+    LARGE_INTEGER DmaBufferPhysicalAddress;
+    UINT Reserved;
+    D3DGPU_VIRTUAL_ADDRESS DmaBufferGpuVirtualAddress;
+    UINT NumSrcAllocations;
+    UINT NumDstAllocations;
+    UINT PrivateDriverDataSize;
+    PVOID pPrivateDriverData;
+} DXGKARG_PRESENT, *PDXGKARG_PRESENT;
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_PRESENT)(
+    _In_ HANDLE hContext,
+    _Inout_ PDXGKARG_PRESENT pPresent);
+
+/* Indices used by VBox present for pAllocationList */
+#define RXGK_PRESENT_SOURCE_INDEX      0
+#define RXGK_PRESENT_DESTINATION_INDEX 1
+
+#endif /* __RXGK_DXGK_PRESENT_DEFS__ */
+
+/*
+ * Minimal Vista-compatible OpenAllocation DDI payloads needed by VBox:
+ * DxgkDdiOpenAllocation expects DXGKARG_OPENALLOCATION with an array of
+ * DXGK_OPENALLOCATIONINFO, and returns hDeviceSpecificAllocation per entry.
+ */
+#ifndef __RXGK_DXGK_OPENALLOCATION_DEFS__
+#define __RXGK_DXGK_OPENALLOCATION_DEFS__
+
+typedef struct _DXGK_OPENALLOCATIONFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Create   : 1;
+            UINT ReadOnly : 1;
+            UINT Reserved : 30;
+        };
+        UINT Value;
+    };
+} DXGK_OPENALLOCATIONFLAGS, *PDXGK_OPENALLOCATIONFLAGS;
+
+typedef struct _DXGK_OPENALLOCATIONINFO
+{
+    D3DKMT_HANDLE hAllocation;
+    PVOID pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+    HANDLE hDeviceSpecificAllocation; /* out */
+} DXGK_OPENALLOCATIONINFO, *PDXGK_OPENALLOCATIONINFO;
+
+typedef struct _DXGKARG_OPENALLOCATION
+{
+    UINT NumAllocations;
+    DXGK_OPENALLOCATIONINFO* pOpenAllocation;
+    PVOID pPrivateDriverData;
+    UINT PrivateDriverSize;
+    DXGK_OPENALLOCATIONFLAGS Flags;
+    UINT SubresourceIndex;
+    SIZE_T SubresourceOffset;
+    UINT Pitch;
+} DXGKARG_OPENALLOCATION, *PDXGKARG_OPENALLOCATION;
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_OPENALLOCATION)(
+    _In_ HANDLE hDevice,
+    _In_ const DXGKARG_OPENALLOCATION* pOpenAllocation);
+
+#endif /* __RXGK_DXGK_OPENALLOCATION_DEFS__ */
+
+typedef
+_Check_return_
+NTSTATUS
+(APIENTRY *PRXGKDDI_DESTROYDEVICE)(
+    _In_ const HANDLE hDevice);
+
+/*
  * Internal helper used by the win32k callbacks and KMT resource open path to
  * ensure shared primary standard allocation private driver data is available.
  */
@@ -128,6 +286,22 @@ RxgkSharedPrimaryEnsure(
     _In_ D3DKMT_HANDLE hAdapter,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _Out_ D3DKMT_HANDLE* phSharedPrimary);
+
+BOOLEAN
+NTAPI
+RxgkSharedPrimaryQuery(
+    _Out_opt_ D3DKMT_HANDLE* phSharedPrimary,
+    _Out_opt_ D3DKMT_HANDLE* phResource,
+    _Out_opt_ D3DKMT_HANDLE* phAllocation,
+    _Out_opt_ HANDLE* phMiniportAllocation,
+    _Out_opt_ PHYSICAL_ADDRESS* pPhysAddr,
+    _Out_opt_ SIZE_T* pSize);
+
+BOOLEAN
+NTAPI
+RxgkSharedPrimaryGetAllocationPrivateData(
+    _Out_ PVOID* ppData,
+    _Out_ UINT* pSize);
 
 // Forward declaration for D3DKMT_DISPLAYMODE (defined in d3dkmthk.h, which has user-mode dependencies)
 // The full definition is included in implementation files that need it
@@ -178,8 +352,11 @@ typedef struct _RXGK_PRIVATE_EXTENSION
     PDXGKDDI_UPDATEACTIVEVIDPNPRESENTPATH    DxgkDdiUpdateActiveVidPnPresentPath;
     PDXGKDDI_ESCAPE                          DxgkDdiEscape;
     PDXGKDDI_CREATEDEVICE                    DxgkDdiCreateDevice;
+    PRXGKDDI_DESTROYDEVICE                   DxgkDdiDestroyDevice;
     PDXGKDDI_CREATEALLOCATION                DxgkDdiCreateAllocation;
+    PRXGKDDI_OPENALLOCATION                  DxgkDdiOpenAllocation;
     PRXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA DxgkDdiGetStandardAllocationDriverData;
+    PRXGKDDI_PRESENT                         DxgkDdiPresent;
     PRXGKDDI_CREATECONTEXT                   DxgkDdiCreateContext;
     PRXGKDDI_DESTROYCONTEXT                  DxgkDdiDestroyContext;
     // BUS

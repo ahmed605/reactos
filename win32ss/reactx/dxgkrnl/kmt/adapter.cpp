@@ -196,7 +196,7 @@ RxgkWin32kQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* Args)
             D3DKMT_UMDFILENAMEINFO LocalInfo;
             BOOLEAN Wow64 = FALSE;
 
-            /* IoIs32bitProcess() is currently UNIMPLEMENTED in our kernel; avoid calling it. */
+            /* WoW64 is not implemented in this ReactOS configuration; always use non-WoW keys. */
             Wow64 = FALSE;
             RtlInitUnicodeString(&ValueName, Wow64 ? L"UserModeDriverNameWow" : L"UserModeDriverName");
 

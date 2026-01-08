@@ -6,6 +6,8 @@
 
 #include <GL/gl.h>
 
+#include "gl_context_info.h"
+
 static double
 TicksToMs(LONGLONG ticks, LONGLONG freq)
 {
@@ -141,6 +143,8 @@ W32Prof_Test_GL11Cube(const ProfilerConfig* cfg)
         DestroyWindow(hRender);
         return;
     }
+
+    W32Prof_DumpGlContextInfo(TEXT("OpenGL 1.1"), hdc, TRUE);
 
     glViewport(0, 0, w, h);
     glEnable(GL_DEPTH_TEST);
